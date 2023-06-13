@@ -9,6 +9,7 @@ import (
 	"main/src/model"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/lucas-clemente/quic-go"
 )
@@ -30,25 +31,28 @@ func NewServer(serverURL string, serverPort int, queuePolicy string) *Server {
 }
 
 func (s *Server) Start() {
-	url := fmt.Sprintf("%s:%d", s.serverURL, s.serverPort)
 
-	listener, err := quic.ListenAddr(url, generateTLSConfig(), nil)
+	url := fmt.Sprintf("%s:%d", s.serverURL, s.serverPort)
+	config := &quic.Config{
+		MaxIdleTimeout:       5 * time.Minute,  // Set a longer maximum idle timeout
+		HandshakeIdleTimeout: 10 * time.Second, // Set the receive connection flow control window size to 20 MB
+	}
+	listener, err := quic.ListenAddr(url, generateTLSConfig(), config)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	log.Println("Server listening on", url)
 
 	for {
 
-		go func() {
-			connection, err := listener.Accept(context.Background())
-			if err != nil {
-				log.Fatal(err)
-			}
+		connection, err := listener.Accept(context.Background())
+		if err != nil {
+			log.Println(err)
+		}
 
-			go s.handleStream(connection)
-		}()
+		go s.handleStream(connection)
+
 	}
 }
 
@@ -58,25 +62,30 @@ func (s *Server) handleStream(connection quic.Connection) {
 	for {
 		stream, err := connection.AcceptStream(context.Background())
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
 		}
 		if streamFinished := connection.Context().Err(); streamFinished != nil {
-			break
+			return
 		}
-		defer stream.Close()
-		// receive file request
-		req := s.receiveData(stream)
-		zaroreq := model.VideoPacketRequest{}
-		if req == zaroreq {
-			break
-		}
-		log.Println("i:", req.Segment)
-		// read file
-		data := s.readFile(req.Bitrate, req.Segment, req.Tile)
+		if err == nil {
+			go func() {
+				defer stream.Close()
+				// receive file request
+				req := s.receiveData(stream)
+				zaroreq := model.VideoPacketRequest{}
+				if req == zaroreq {
+					return
+				}
+				log.Println("i:", req.Segment)
+				// read file
+				data := s.readFile(req.Bitrate, req.Segment, req.Tile)
 
-		// send file response
-		s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
-		log.Println("i:", req.Segment)
+				// send file response
+				s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
+				log.Println("i:", req.Segment)
+
+			}()
+		}
 	}
 
 }
@@ -101,11 +110,11 @@ func (s *Server) handleRequest(req model.VideoPacketRequest, responses chan mode
 func (s *Server) readFile(bitrate model.Bitrate, segment int, tile int) []byte {
 	basePath, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	// TODO check the file name logic
 	//data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s", bitrate, segment, tile))
-	data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_10_dash_track10_%d.m4s", tileGlobal))
+	data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_10_dash_track10_%d.m4s", segment))
 
 	str := strconv.Itoa(tileGlobal)
 
@@ -113,7 +122,7 @@ func (s *Server) readFile(bitrate model.Bitrate, segment int, tile int) []byte {
 	fmt.Printf(str)
 	tileGlobal += 1
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	return data
 }
@@ -142,13 +151,13 @@ func (s *Server) sendData2(stream quic.Stream, priority model.Priority, bitrate 
 	// encode the response as JSON
 	resBytes, err := json.Marshal(res)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 
 	// send the response data to the client
 	_, err = stream.Write(resBytes)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 }
 
@@ -164,6 +173,6 @@ func (s *Server) sendData(stream quic.Stream, priority model.Priority, bitrate m
 		Data:     data,
 	}
 	if err := json.NewEncoder(stream).Encode(&res); err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 }
