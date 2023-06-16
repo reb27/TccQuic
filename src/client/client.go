@@ -24,6 +24,8 @@ type Client struct {
 
 var (
 	bufferFinished bool = false
+
+	addFinish      bool = false
 	adbufferLock   sync.Mutex
 	mu             sync.Mutex
 	receiveLock    sync.Mutex
@@ -104,21 +106,17 @@ func (c *Client) Start() {
 		c.consumeBuffer()
 		wg.Done()
 	}()
-
-	// High priority stream
 	wg.Add(1)
 	go func() {
 		c.handleStream(connection, model.HIGH_PRIORITY)
 		wg.Done()
 	}()
-
-	// Low priority stream
+	// High priority stream
 	wg.Add(1)
 	go func() {
 		c.handleStream(connection, model.LOW_PRIORITY)
 		wg.Done()
 	}()
-
 	wg.Wait()
 }
 
@@ -128,6 +126,7 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 	var wg2 sync.WaitGroup
 
 	// send file request
+	semaphore := make(chan struct{}, 1)
 	for {
 
 		zaroreq := model.VideoPacketRequest{}
@@ -138,7 +137,6 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 			break
 		}
 		mu.Lock()
-		log.Println("handlestreammulock", len(ints))
 		req := ints[0]
 		if len(ints) != 1 {
 			log.Println("before reduction", len(ints))
@@ -152,12 +150,13 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 		mu.Unlock()
 
 		if req == zaroreq {
-			log.Println("req == zaroreq??:", len(responseBuffer))
 
 		} else {
 			wg2.Add(1)
+			semaphore <- struct{}{}
 			go func(req model.VideoPacketRequest) {
 				defer func() {
+					<-semaphore
 					wg2.Done()
 				}()
 				stream, err := connection.OpenStreamSync(context.Background())
@@ -229,11 +228,12 @@ func (c *Client) addBuffer() {
 	}
 	zaroreq := model.VideoPacketRequest{}
 	for {
-		if zaroreq == ints[0] {
+		if zaroreq == ints[0] && len(ints) == 1 {
 			bufferFinished = true
 			break
 		}
 	}
+	addFinish = true
 
 }
 
@@ -249,5 +249,43 @@ func (c *Client) receiveData(stream quic.Stream) (res model.VideoPacketResponse)
 
 // Consume buffer
 func (c *Client) consumeBuffer() {
+
+	log.Println("consumeBuffer:", len(responseBuffer))
+	flag1 := true
+	counter := 0
+	ticker := time.NewTicker(1 * time.Second)
+	for range ticker.C {
+		if addFinish && len(responseBuffer) == 0 {
+			break
+		}
+		for flag1 && len(responseBuffer) <= 4 {
+			if len(responseBuffer) == 4 {
+				flag1 = false
+			}
+			if addFinish && len(responseBuffer) == 0 {
+				break
+			}
+		}
+		if addFinish && len(responseBuffer) == 0 {
+			break
+		}
+		receiveLock.Lock()
+		if len(responseBuffer) != 1 {
+			log.Println("Testec:", responseBuffer[0].Segment)
+			responseBuffer = responseBuffer[1:]
+			counter++
+		} else {
+
+			responseBuffer = make([]model.VideoPacketResponse, 0)
+			counter++
+			flag1 = true
+		}
+
+		receiveLock.Unlock()
+
+		log.Println("Testec:", len(responseBuffer))
+
+	}
+	log.Println("Consumed:", counter)
 	// TODO dequeue from buffer and simulate user watch behavior (1s sleep maybe?)
 }
