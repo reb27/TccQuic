@@ -21,16 +21,23 @@ type Client struct {
 	serverPort int
 	buffer     Buffer
 }
+type ResBufferElement struct {
+	res     model.VideoPacketResponse
+	ReqTime time.Time
+	ResTime time.Time
+}
 
 var (
 	bufferFinished bool = false
 
-	addFinish      bool = false
-	adbufferLock   sync.Mutex
-	mu             sync.Mutex
-	receiveLock    sync.Mutex
-	responseBuffer = []model.VideoPacketResponse{}
-	ints           = []model.VideoPacketRequest{{
+	addFinish       bool = false
+	adbufferLock    sync.Mutex
+	mu              sync.Mutex
+	receiveLock     sync.Mutex
+	responseBuffer  = []model.VideoPacketResponse{}
+	responseBuffer2 = []ResBufferElement{}
+
+	ints = []model.VideoPacketRequest{{
 		Priority: model.HIGH_PRIORITY,
 		Bitrate:  model.LOW_BITRATE,
 		Segment:  12,
@@ -165,6 +172,7 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 				}
 				defer stream.Close()
 				c.sendRequest(stream, req)
+				tempReqTime := time.Now()
 
 				str := fmt.Sprintf("%f", priority)
 				fmt.Printf(str)
@@ -172,7 +180,16 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 
 				res := c.receiveData(stream)
 				receiveLock.Lock()
-				responseBuffer = append(responseBuffer, res)
+
+				r := ResBufferElement{
+					res:     res,        // preencher com os valores desejados para o campo res
+					ResTime: time.Now(), // usar a função time.Now() para obter a hora atual para o campo time
+					ReqTime: tempReqTime,
+				}
+
+				responseBuffer = append(responseBuffer, r.res)
+				responseBuffer2 = append(responseBuffer2, r)
+
 				receiveLock.Unlock()
 				// write to file
 				actualdate := time.Now().Format("2006-01-02_15-04-05.000000")
@@ -253,7 +270,7 @@ func (c *Client) consumeBuffer() {
 	log.Println("consumeBuffer:", len(responseBuffer))
 	flag1 := true
 	counter := 0
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	for range ticker.C {
 		if addFinish && len(responseBuffer) == 0 {
 			break
@@ -271,7 +288,10 @@ func (c *Client) consumeBuffer() {
 		}
 		receiveLock.Lock()
 		if len(responseBuffer) != 1 {
-			log.Println("Testec:", responseBuffer[0].Segment)
+			//log.Println("Testec:", responseBuffer[0].Segment)
+			log.Println("Testec:", responseBuffer2[len(responseBuffer)].res.Segment)
+			log.Println("Testec:", responseBuffer2[len(responseBuffer)].ReqTime)
+			log.Println("Testec:", responseBuffer2[len(responseBuffer)].ResTime)
 			responseBuffer = responseBuffer[1:]
 			counter++
 		} else {
