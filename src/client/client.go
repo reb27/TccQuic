@@ -10,11 +10,36 @@ import (
 	"log"
 	"main/src/model"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/lucas-clemente/quic-go"
 )
+
+// A function that converts a string like "[1, 2, 3, 4]" to a slice of int
+func ParseArray(input string) ([]int, error) {
+	// Remove square brackets and whitespace
+	input = strings.TrimPrefix(input, "[")
+	input = strings.TrimSuffix(input, "]")
+	input = strings.TrimSpace(input)
+
+	// Split the input into individual elements
+	elements := strings.Split(input, ",")
+
+	// Parse each element into an integer and store in the result array
+	var result []int
+	for _, element := range elements {
+		value, err := strconv.Atoi(strings.TrimSpace(element))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+
+	return result, nil
+}
 
 type Client struct {
 	serverURL  string
@@ -30,7 +55,9 @@ type ResBufferElement struct {
 var (
 	bufferFinished bool = false
 
-	addFinish       bool = false
+	addFinish      bool = false
+	streamFinished bool = false
+
 	adbufferLock    sync.Mutex
 	mu              sync.Mutex
 	receiveLock     sync.Mutex
@@ -82,18 +109,29 @@ func NewClient(serverURL string, serverPort int) *Client {
 func (c *Client) Start() {
 	url := fmt.Sprintf("%s:%d", c.serverURL, c.serverPort)
 
+	var configInfo = NewConfigurable()
+	var marks = [5]int{50, 45, 30, 49, 38}
+	log.Println("marks:", marks)
+
+	configInfo.ReadFile("configFile")
+
+	log.Println("configInfo.adaptRate:", configInfo.adaptRate)
+	log.Println("configInfo.segments:", configInfo.segments)
+
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"quic-streaming"},
 	}
 	config := &quic.Config{
-		MaxIdleTimeout:       5 * time.Minute,  // Set a longer maximum idle timeout
-		HandshakeIdleTimeout: 10 * time.Second, // Set the receive connection flow control window size to 20 MB
+		MaxIdleTimeout:        500 * time.Minute, // Set a longer maximum idle timeout
+		HandshakeIdleTimeout:  100 * time.Second, // Set the receive connection flow control window size to 20 MB
+		MaxIncomingStreams:    20000,             // Set the maximum number of incoming streams
+		MaxIncomingUniStreams: 20000,             // Set the maximum number of incoming unidirectional streams
 	}
 	// Create new QUIC connection
 	connection, err := quic.DialAddr(url, tlsConf, config)
 	if err != nil {
-		log.Fatal(err)
+		//log.Fatal(err)
 	}
 
 	var wg sync.WaitGroup
@@ -112,43 +150,35 @@ func (c *Client) Start() {
 	go func() {
 		c.consumeBuffer()
 		wg.Done()
+		log.Println("consumeBuffer finished")
 	}()
 	wg.Add(1)
 	go func() {
-		c.handleStream(connection, model.HIGH_PRIORITY)
+		c.handleStream(connection, model.HIGH_PRIORITY, configInfo)
 		wg.Done()
 	}()
-	// High priority stream
-	wg.Add(1)
-	go func() {
-		c.handleStream(connection, model.LOW_PRIORITY)
-		wg.Done()
-	}()
+
 	wg.Wait()
 }
 
-func (c *Client) handleStream(connection quic.Connection, priority model.Priority) {
+func (c *Client) handleStream(connection quic.Connection, priority model.Priority, configInfo *ConfigurableImpl) {
 
 	// create stream
 	var wg2 sync.WaitGroup
-
 	// send file request
-	semaphore := make(chan struct{}, 1)
+	semaphore := make(chan struct{}, configInfo.semaphoreCount)
 	for {
 
 		zaroreq := model.VideoPacketRequest{}
 
 		if bufferFinished == true && ints[0] == zaroreq {
 
-			log.Println("bufferFinished", len(ints))
 			break
 		}
 		mu.Lock()
 		req := ints[0]
 		if len(ints) != 1 {
-			log.Println("before reduction", len(ints))
 			ints = ints[1:]
-			log.Println("after reduction", len(ints))
 
 		} else {
 			ints = make([]model.VideoPacketRequest, 1)
@@ -168,15 +198,15 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 				}()
 				stream, err := connection.OpenStreamSync(context.Background())
 				if err != nil {
-					log.Fatal(err)
+					//log.Fatal(err)
 				}
-				defer stream.Close()
+				defer stream.Context().Done()
 				c.sendRequest(stream, req)
 				tempReqTime := time.Now()
 
 				str := fmt.Sprintf("%f", priority)
-				fmt.Printf(str)
-				log.Println("i:", req.Segment)
+				//fmt.Printf(str)
+				//stream.CancelRead(404)
 
 				res := c.receiveData(stream)
 				receiveLock.Lock()
@@ -187,8 +217,8 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 					ReqTime: tempReqTime,
 				}
 
-				responseBuffer = append(responseBuffer, r.res)
 				responseBuffer2 = append(responseBuffer2, r)
+				log.Println("---------------elementToBuffer:----------", r.res.Segment)
 
 				receiveLock.Unlock()
 				// write to file
@@ -202,17 +232,23 @@ func (c *Client) handleStream(connection quic.Connection, priority model.Priorit
 				defer file.Close()
 
 				content := res.Data
+				resBytes, err := json.Marshal(res)
+				if err != nil {
+					//fmt.Println("Error:", err)
+					return
+				}
+
+				sizeInBytes := len(resBytes)
+				fmt.Printf("Size of res: %d bytes\n", sizeInBytes)
 				_, err = file.Write(content)
 				if err != nil {
-					panic(err)
+					//panic(err)
 				}
 			}(req)
 		}
 	}
-	log.Println("TesteA:", len(responseBuffer))
 	wg2.Wait()
-	log.Println("TesteB:", len(responseBuffer))
-	log.Println("receivebuffer:", len(responseBuffer))
+	streamFinished = true
 
 }
 
@@ -222,27 +258,35 @@ func (c *Client) sendRequest(stream quic.Stream, req model.VideoPacketRequest) {
 	// fmt.Printf("Client stream %d: Sending '%+v'\n", streamId, req)
 
 	if err := json.NewEncoder(stream).Encode(&req); err != nil {
-		log.Fatal(err)
+		//log.Fatal(err)
 	}
 }
+
 func (c *Client) addBuffer() {
-	counter := 6
-	log.Println("addbuffermulock", len(ints))
+	counter := 12
+	counter2 := 1
+
 	adbufferLock.Unlock()
 	for {
 
 		mu.Lock()
-		if len(ints) <= 1 && counter > 0 {
+		if len(ints) >= 1 && counter > 0 {
+			inpt.Segment = counter
 			ints = append(ints, inpt)
 			counter = counter - 1
-			log.Println("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", counter)
 
 		}
 		mu.Unlock()
 		if counter == 0 {
-			break
+			if counter2 == 0 {
+				break
+			} else {
+				counter2 = counter2 - 1
+				counter = 120
+			}
 		}
 	}
+
 	zaroreq := model.VideoPacketRequest{}
 	for {
 		if zaroreq == ints[0] && len(ints) == 1 {
@@ -267,45 +311,53 @@ func (c *Client) receiveData(stream quic.Stream) (res model.VideoPacketResponse)
 // Consume buffer
 func (c *Client) consumeBuffer() {
 
-	log.Println("consumeBuffer:", len(responseBuffer))
 	flag1 := true
 	counter := 0
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Millisecond)
 	for range ticker.C {
-		if addFinish && len(responseBuffer) == 0 {
+		if addFinish && len(responseBuffer2) == 0 && streamFinished {
 			break
 		}
-		for flag1 && len(responseBuffer) <= 4 {
-			if len(responseBuffer) == 4 {
+		for flag1 && len(responseBuffer2) <= 4 && streamFinished {
+			if len(responseBuffer2) == 4 {
 				flag1 = false
 			}
-			if addFinish && len(responseBuffer) == 0 {
+			if addFinish && streamFinished {
 				break
 			}
 		}
-		if addFinish && len(responseBuffer) == 0 {
+		if addFinish && len(responseBuffer2) == 0 && streamFinished {
 			break
 		}
 		receiveLock.Lock()
-		if len(responseBuffer) != 1 {
+		if len(responseBuffer2) != 0 {
 			//log.Println("Testec:", responseBuffer[0].Segment)
-			log.Println("Testec:", responseBuffer2[len(responseBuffer)].res.Segment)
-			log.Println("Testec:", responseBuffer2[len(responseBuffer)].ReqTime)
-			log.Println("Testec:", responseBuffer2[len(responseBuffer)].ResTime)
-			responseBuffer = responseBuffer[1:]
+			//log.Println("Testec1:", responseBuffer2[0].res.Segment)
+			//log.Println("Testec2:", int64(responseBuffer2[0].ResTime.Nanosecond())-int64(responseBuffer2[0].ReqTime.Nanosecond()))
+			//responseBuffer2 = responseBuffer2[1:]
+			//counter++
+			//log.Println("Testec:", responseBuffer[0].Segment)
+
+			timeReQ := int64(responseBuffer2[0].ReqTime.Nanosecond())
+			timeReS := int64(responseBuffer2[0].ResTime.Nanosecond())
+			secReQ := (int64(responseBuffer2[0].ReqTime.Second()) * 1000000000)
+			secReS := (int64(responseBuffer2[0].ResTime.Second()) * 1000000000)
+			Testec2 := int64((secReS + timeReS) - (secReQ + timeReQ))
+
+			log.Println("Testec1:", responseBuffer2[0].res.Segment, "Testec2:", Testec2, "timeReQ:", timeReQ, "timeReS:", timeReS, "secReQ:", (secReQ + timeReQ), "secReS:", (secReS + timeReS), "responseBuffer2", len(responseBuffer2))
+
+			responseBuffer2 = responseBuffer2[1:]
+			log.Println("responseBuffer2", len(responseBuffer2))
+
 			counter++
 		} else {
 
-			responseBuffer = make([]model.VideoPacketResponse, 0)
 			counter++
 			flag1 = true
 		}
 
 		receiveLock.Unlock()
 
-		log.Println("Testec:", len(responseBuffer))
-
 	}
-	log.Println("Consumed:", counter)
 	// TODO dequeue from buffer and simulate user watch behavior (1s sleep maybe?)
 }

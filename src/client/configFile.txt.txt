@@ -1,0 +1,8 @@
+semaphoreCount 10
+tiles 100
+segments 5
+segmentTime 1
+adaptRate [1, 2, 3, 4]
+requestSize 100
+responseSize 200
+initialSize 50
