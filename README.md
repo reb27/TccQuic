@@ -10,7 +10,7 @@ WFQ: TODO
 SP: TODO
 
 ## Setup Instructions
-Install GO version 1.18.x or 1.19.x (quic-go will not work on 1.20, see https://github.com/quic-go/quic-go/wiki/quic-go-and-Go-versions and https://pkg.go.dev/github.com/lucas-clemente/quic-go#section-readme for more details): https://go.dev/dl/
+Install GO version 1.19.x (quic-go will not work on 1.20, see https://github.com/quic-go/quic-go/wiki/quic-go-and-Go-versions and https://pkg.go.dev/github.com/lucas-clemente/quic-go#section-readme for more details): https://go.dev/dl/
 Clone repository: https://github.com/quic-streaming/tcc
 
 ## How to run
