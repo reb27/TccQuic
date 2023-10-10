@@ -1,0 +1,68 @@
+@startuml
+
+interface Scheduler {}
+
+interface SchedulerEntry {}
+
+class fifoScheduler {
+    -queue: CircularQueue[*fifoEntry]
+}
+
+class fifoEntry {
+    -scheduler: *fifoScheduler
+    -enqueued: bool
+    -userdata: T
+}
+
+class spScheduler {
+    -queue: PriorityQueue[float32, *spEntry]
+}
+
+class spEntry {
+    -scheduler: *spScheduler
+    -priority: float32
+    -enqueued: bool
+    -userdata: T
+}
+
+class wfqScheduler {
+    -queue: PriorityQueue[float32, *wfqEntry]
+    -lastVirtualFinish: float32
+}
+
+class wfqEntry {
+    -scheduler: *wfqScheduler
+    -inverseWeight: float32
+    -enqueued: bool
+    -lastVirtualFinish: float32
+    -userdata: T
+}
+
+class PriorityQueue #antiquewhite {
+    +Enqueue(value: T, priority: K): bool
+    +Dequeue(): (T, bool)
+}
+
+class CircularQueue #antiquewhite {
+    +Enqueue(value: T): bool
+    +Dequeue(): (T, bool)
+}
+
+Scheduler <|.up. fifoScheduler
+fifoScheduler *- fifoEntry
+fifoEntry .down.|> SchedulerEntry
+
+Scheduler <|.right. spScheduler
+spScheduler *- spEntry
+spEntry .right.|> SchedulerEntry
+
+Scheduler <|.down. wfqScheduler
+wfqScheduler *- wfqEntry
+wfqEntry .up.|> SchedulerEntry
+
+fifoScheduler *-up- CircularQueue
+
+spScheduler *-down- PriorityQueue
+wfqScheduler *-up- PriorityQueue
+
+@enduml

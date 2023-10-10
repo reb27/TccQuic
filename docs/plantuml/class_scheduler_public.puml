@@ -1,0 +1,19 @@
+@startuml
+
+interface Scheduler {
+    +{static} NewFIFO(capacity: int): Scheduler
+    +{static} NewSP(capacity: int): Scheduler
+    +{static} NewWFQ(capacity: int): Scheduler
+    +CreateEntry(userdata: T): SchedulerEntry
+    +Dequeue(): SchedulerEntry
+}
+
+interface SchedulerEntry {
+    +Enqueue(): bool
+    +SetPriority(priority: float32)
+    +UserData(): T
+}
+
+Scheduler *- SchedulerEntry
+
+@enduml
