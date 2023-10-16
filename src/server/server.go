@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"main/src/model"
+	"main/src/server/stream"
 	"os"
 	"time"
 
@@ -16,14 +17,14 @@ import (
 type Server struct {
 	serverURL   string
 	serverPort  int
-	queuePolicy QueuePolicy
+	queuePolicy stream.QueuePolicy
 }
 
 func NewServer(serverURL string, serverPort int, queuePolicy string) *Server {
 	return &Server{
 		serverURL:   serverURL,
 		serverPort:  serverPort,
-		queuePolicy: QueuePolicy(queuePolicy),
+		queuePolicy: stream.QueuePolicy(queuePolicy),
 	}
 }
 
@@ -50,44 +51,50 @@ func (s *Server) Start() {
 			log.Println(err)
 		}
 		if err == nil {
-			go s.handleStream(connection)
+			go s.handleConnection(connection)
 		}
 
 	}
 }
 
-func (s *Server) handleStream(connection quic.Connection) {
-	// open stream
+func (s *Server) handleConnection(connection quic.Connection) {
+	streamQueue := stream.NewStreamQueue(s.queuePolicy, 32)
 
-	for {
-		stream, err := connection.AcceptStream(context.Background())
-		if err != nil {
-			log.Println(err)
+	// accept streams in background
+	go func() {
+		for {
+			stream, err := connection.AcceptStream(context.Background())
+			if err != nil {
+				log.Println(err)
+			}
+			if streamFinished := connection.Context().Err(); streamFinished != nil {
+				streamQueue.Close()
+				return
+			}
+			if err == nil {
+				streamQueue.Add(stream, 1.0)
+			}
 		}
-		if streamFinished := connection.Context().Err(); streamFinished != nil {
-			return
-		}
-		if err == nil {
-			go func() {
-				defer stream.Close()
-				// receive file request
-				req := s.receiveData(stream)
-				zaroreq := model.VideoPacketRequest{}
-				if req == zaroreq {
-					return
-				}
-				log.Println("i:", req.Segment)
-				// read file
-				data := s.readFile(req.Bitrate, req.Segment, req.Tile)
+	}()
 
-				// send file response
-				s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
-				log.Println("i:", req.Segment)
+	streamQueue.Run(s.handleStream)
+}
 
-			}()
-		}
+func (s *Server) handleStream(stream *stream.Stream) {
+	defer stream.Close()
+	// receive file request
+	req := s.receiveData(stream)
+	zaroreq := model.VideoPacketRequest{}
+	if req == zaroreq {
+		return
 	}
+	log.Println("i:", req.Segment)
+	// read file
+	data := s.readFile(req.Bitrate, req.Segment, req.Tile)
 
+	// send file response
+	s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
+	log.Println("i:", req.Segment)
 }
 
 // Handle request
@@ -172,4 +179,3 @@ func (s *Server) sendData(stream quic.Stream, priority model.Priority, bitrate m
 		log.Println(err)
 	}
 }
-
