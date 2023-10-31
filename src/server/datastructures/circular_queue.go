@@ -41,3 +41,7 @@ func (q *CircularQueue[T]) Dequeue() (val T, ok bool) {
 
 	return
 }
+
+func (q *CircularQueue[T]) IsEmpty() bool {
+	return q.len == 0
+}

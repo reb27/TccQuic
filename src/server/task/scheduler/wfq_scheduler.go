@@ -1,6 +1,6 @@
 package scheduler
 
-import "main/src/server/scheduler/datastructures"
+import "main/src/server/datastructures"
 
 type wfqScheduler[T any] struct {
 	queue             datastructures.PriorityQueue[float32, *wfqEntry[T]]

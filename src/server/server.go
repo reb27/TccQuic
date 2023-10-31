@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 	"main/src/model"
-	"main/src/server/stream"
+	"main/src/server/task"
 	"os"
 	"time"
 
@@ -17,14 +17,14 @@ import (
 type Server struct {
 	serverURL   string
 	serverPort  int
-	queuePolicy stream.QueuePolicy
+	queuePolicy task.QueuePolicy
 }
 
 func NewServer(serverURL string, serverPort int, queuePolicy string) *Server {
 	return &Server{
 		serverURL:   serverURL,
 		serverPort:  serverPort,
-		queuePolicy: stream.QueuePolicy(queuePolicy),
+		queuePolicy: task.QueuePolicy(queuePolicy),
 	}
 }
 
@@ -58,7 +58,7 @@ func (s *Server) Start() {
 }
 
 func (s *Server) handleConnection(connection quic.Connection) {
-	streamQueue := stream.NewStreamQueue(s.queuePolicy, 32)
+	taskScheduler := task.NewTaskScheduler(32, s.queuePolicy)
 
 	// accept streams in background
 	go func() {
@@ -68,19 +68,23 @@ func (s *Server) handleConnection(connection quic.Connection) {
 				log.Println(err)
 			}
 			if streamFinished := connection.Context().Err(); streamFinished != nil {
-				streamQueue.Close()
+				taskScheduler.Stop()
 				return
 			}
 			if err == nil {
-				streamQueue.Add(stream, 1.0)
+				priorityGroupId := 1
+				priority := float32(1.0)
+				taskScheduler.Enqueue(priorityGroupId, priority, func() {
+					s.handleStream(stream)
+				})
 			}
 		}
 	}()
 
-	streamQueue.Run(s.handleStream)
+	taskScheduler.Run()
 }
 
-func (s *Server) handleStream(stream *stream.Stream) {
+func (s *Server) handleStream(stream quic.Stream) {
 	defer stream.Close()
 	// receive file request
 	req := s.receiveData(stream)

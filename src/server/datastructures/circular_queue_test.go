@@ -1,7 +1,7 @@
 package datastructures_test
 
 import (
-	"main/src/server/scheduler/datastructures"
+	"main/src/server/datastructures"
 	"testing"
 
 	"github.com/stretchr/testify/assert"

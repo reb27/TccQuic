@@ -1,6 +1,6 @@
 package scheduler
 
-import "main/src/server/scheduler/datastructures"
+import "main/src/server/datastructures"
 
 type fifoScheduler[T any] struct {
 	queue datastructures.CircularQueue[*fifoEntry[T]]
