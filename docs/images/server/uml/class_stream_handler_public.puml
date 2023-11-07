@@ -1,0 +1,10 @@
+@startuml
+
+class StreamHandler {
+    +{static} NewStreamHandler(policy: QueuePolicy): *StreamHandler
+    +Start()
+    +Stop()
+    +HandleStream(stream: quic.Stream)
+}
+
+@enduml

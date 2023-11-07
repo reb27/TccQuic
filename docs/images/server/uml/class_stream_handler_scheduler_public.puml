@@ -14,6 +14,6 @@ interface SchedulerEntry {
     +UserData(): T
 }
 
-Scheduler *- SchedulerEntry
+Scheduler "1" *- "n" SchedulerEntry
 
 @enduml

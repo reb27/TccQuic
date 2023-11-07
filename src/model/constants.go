@@ -7,6 +7,8 @@ const (
 	LOW_PRIORITY
 )
 
+const PRIORITY_LEVEL_COUNT int = 2
+
 type Bitrate int
 
 const (

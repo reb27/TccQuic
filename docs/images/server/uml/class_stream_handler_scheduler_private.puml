@@ -38,12 +38,12 @@ class wfqEntry {
     -userdata: T
 }
 
-class PriorityQueue #antiquewhite {
+class datastructures.PriorityQueue #antiquewhite {
     +Enqueue(value: T, priority: K): bool
     +Dequeue(): (T, bool)
 }
 
-class CircularQueue #antiquewhite {
+class datastructures.CircularQueue #antiquewhite {
     +Enqueue(value: T): bool
     +Dequeue(): (T, bool)
 }
@@ -60,9 +60,9 @@ Scheduler <|.down. wfqScheduler
 wfqScheduler *- wfqEntry
 wfqEntry .up.|> SchedulerEntry
 
-fifoScheduler *-up- CircularQueue
+fifoScheduler *-- datastructures.CircularQueue
 
-spScheduler *-down- PriorityQueue
-wfqScheduler *-up- PriorityQueue
+spScheduler *-- datastructures.PriorityQueue
+wfqScheduler *-- datastructures.PriorityQueue
 
 @enduml

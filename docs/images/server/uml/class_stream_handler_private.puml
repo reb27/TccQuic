@@ -1,0 +1,44 @@
+@startuml
+
+class StreamHandler {
+    -taskScheduler: *TaskScheduler
+    +{static} NewStreamHandler(policy: QueuePolicy): *StreamHandler
+    +Start()
+    +Stop()
+    +HandleStream(stream: quic.Stream)
+    -handleRequest(stream: quic.Stream, req: model.VideoPacketRequest)
+}
+
+class TaskScheduler {
+    -groups: []priorityGroup
+    -scheduler: scheduler.Scheduler[int]
+    -isStopped: bool
+    +{static} NewTaskScheduler(policy: QueuePolicy): *TaskScheduler
+    +Stop()
+    +Enqueue(priorityGroupId: int, task: func()): bool
+    +Run()
+}
+
+class priorityGroup {
+    +entry: scheduler.SchedulerEntry[int]
+    +tasks: datastructures.CircularQueue[func]
+    +priority: float32
+}
+
+interface scheduler.Scheduler #antiquewhite {}
+
+interface scheduler.SchedulerEntry #antiquewhite {}
+
+class datastructures.CircularQueue #antiquewhite {
+    +Enqueue(value: T): bool
+    +Dequeue(): (T, bool)
+}
+
+StreamHandler o-- TaskScheduler
+TaskScheduler o-- scheduler.Scheduler
+TaskScheduler "1" *- "n" priorityGroup
+priorityGroup o-- CircularQueue
+priorityGroup --> scheduler.SchedulerEntry
+scheduler.Scheduler "1" *- "n" scheduler.SchedulerEntry
+
+@enduml

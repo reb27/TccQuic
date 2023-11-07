@@ -1,7 +1,7 @@
 package scheduler_test
 
 import (
-	"main/src/server/task/scheduler"
+	"main/src/server/stream_handler/scheduler"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
