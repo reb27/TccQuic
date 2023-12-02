@@ -70,6 +70,7 @@ func NewTaskScheduler(policy QueuePolicy) *TaskScheduler {
 	cond := sync.NewCond(mutex)
 
 	return &TaskScheduler{
+		groups:    groups,
 		scheduler: sc,
 
 		mutex:     mutex,
@@ -103,7 +104,7 @@ func (ps *TaskScheduler) Enqueue(priorityGroupId int, task func()) bool {
 	ok := group.tasks.Enqueue(task)
 	if ok && wasEmpty {
 		group.entry.SetPriority(group.priority)
-		group.entry.Enqueue()
+		ok = group.entry.Enqueue()
 	}
 
 	ps.mutex.Unlock()

@@ -33,14 +33,18 @@ func (s *StreamHandler) HandleStream(stream quic.Stream) {
 	// receive file request
 	req := s.receiveData(stream)
 	if req == (model.VideoPacketRequest{}) {
+		log.Println("Invalid request")
 		stream.Close()
 		return
 	}
 
 	// enqueue request processing
-	s.taskScheduler.Enqueue(int(req.Priority), func() {
+	ok := s.taskScheduler.Enqueue(int(req.Priority), func() {
 		s.handleRequest(stream, req)
 	})
+	if !ok {
+		log.Println("Task enqueue failed")
+	}
 }
 
 func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketRequest) {

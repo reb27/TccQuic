@@ -3,6 +3,7 @@ package main
 import (
 	"main/src/client"
 	"main/src/server"
+	"main/src/test_client"
 	"os"
 )
 
@@ -18,5 +19,8 @@ func main() {
 		queuePolicy := os.Args[2]
 		server := server.NewServer(url, port, queuePolicy)
 		server.Start()
+	} else if arg == "test-client" {
+		client := test_client.NewClient(url, port)
+		client.Start()
 	}
 }
