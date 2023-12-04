@@ -17,9 +17,13 @@ func main() {
 		client.Start()
 	} else if arg == "server" {
 		queuePolicy := os.Args[2]
-		server := server.NewServer(url, port, queuePolicy)
+		server := server.NewServer("0.0.0.0", port, queuePolicy)
 		server.Start()
 	} else if arg == "test-client" {
+		if len(os.Args) > 1 {
+			url = os.Args[2]
+		}
+
 		client := test_client.NewClient(url, port)
 		client.Start()
 	}

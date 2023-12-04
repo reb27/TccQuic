@@ -44,6 +44,7 @@ func (c *Client) Start() {
 	}
 
 	// Create new QUIC connection
+	log.Println("Connecting...")
 	connection, err := quic.DialAddr(url, tlsConf, config)
 	if err != nil {
 		log.Println(err)
