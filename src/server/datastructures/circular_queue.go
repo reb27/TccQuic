@@ -34,6 +34,8 @@ func (q *CircularQueue[T]) Dequeue() (val T, ok bool) {
 	}
 
 	val = q.buffer[q.head]
+	var empty T
+	q.buffer[q.head] = empty
 	ok = true
 
 	q.head = (q.head + 1) % len(q.buffer)

@@ -2,13 +2,14 @@ from mininet.topo import Topo
 from mininet.net import Mininet, Host
 
 class HostParams:
-    def __init__(self, bw: float, delay: any = 0, loss: float = 0):
+    def __init__(self, bw = None, delay = None, loss = None):
         self.bw = bw
         self.delay = delay
         self.loss = loss
 
 class NetParams:
-    def __init__(self, server: HostParams, clients: 'list[HostParams]'):
+    def __init__(self, server: HostParams = HostParams(),
+                 clients: 'list[HostParams]' = []):
         self.server = server
         self.clients = clients
 

@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-const maxTasksPerPriorityLevel int = 100
+const maxTasksPerPriorityLevel int = 1000
 
 type QueuePolicy string
 
@@ -19,7 +19,7 @@ const (
 )
 
 type TaskScheduler struct {
-	groups    [model.PRIORITY_LEVEL_COUNT]priorityGroup
+	groups    []*priorityGroup
 	scheduler scheduler.Scheduler[int]
 
 	mutex     *sync.Mutex
@@ -57,9 +57,9 @@ func NewTaskScheduler(policy QueuePolicy) *TaskScheduler {
 		panic("invalid queue policy")
 	}
 
-	groups := [model.PRIORITY_LEVEL_COUNT]priorityGroup{}
+	groups := make([]*priorityGroup, model.PRIORITY_LEVEL_COUNT)
 	for i := 0; i < model.PRIORITY_LEVEL_COUNT; i++ {
-		groups[i] = priorityGroup{
+		groups[i] = &priorityGroup{
 			entry:    sc.CreateEntry(i),
 			tasks:    datastructures.NewCircularQueue[func()](maxTasksPerPriorityLevel),
 			priority: getPriority(model.Priority(i)),
@@ -98,7 +98,7 @@ func (ps *TaskScheduler) Enqueue(priorityGroupId int, task func()) bool {
 		return false
 	}
 
-	group := &ps.groups[priorityGroupId]
+	group := ps.groups[priorityGroupId]
 
 	wasEmpty := group.tasks.IsEmpty()
 	ok := group.tasks.Enqueue(task)

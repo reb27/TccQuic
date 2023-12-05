@@ -41,7 +41,7 @@ withSSH() {
 
 # upload SOURCE DESTINATION
 upload() {
-    scp -q -B "$1" "mininet@$IP:$2"
+    rsync -a "$1" "mininet@$IP:$2"
     EXIT_CODE=$?
     if [[ $EXIT_CODE != 0 ]]; then
         echo
@@ -65,6 +65,7 @@ echo -e "${PURPLE}Uploading to $IP at $REMOTE_DIR...${NC}"
 
 withSSH "sudo rm -rf $REMOTE_DIR/* && mkdir -p $REMOTE_DIR"
 upload "../../main" "$REMOTE_DIR"
+upload "../../data" "$REMOTE_DIR"
 upload "resources/server_scheduler_test.py" "$REMOTE_DIR"
 upload "resources/utils.py" "$REMOTE_DIR"
 

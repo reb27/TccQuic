@@ -54,29 +54,42 @@ func (c *Client) Start() {
 	log.Println("Connected")
 	c.connection = connection
 
-	c.spawnRequest(model.VideoPacketRequest{
-		Priority: model.LOW_PRIORITY,
-		Bitrate:  model.HIGH_BITRATE,
-		Segment:  1,
-		Tile:     1,
-	})
+	for i := 0; i < 3; i++ {
+		priority := model.LOW_PRIORITY
+		if i%6 == 0 {
+			priority = model.HIGH_PRIORITY
+		}
+
+		c.spawnRequest(priority, i+1)
+	}
 
 	c.waitResponses()
 }
 
-func (c *Client) spawnRequest(r model.VideoPacketRequest) {
+func (c *Client) spawnRequest(priority model.Priority, segment int) {
 	c.waitGroup.Add(1)
 
 	go func() {
 		defer c.waitGroup.Done()
 
-		response, err := c.request(r)
+		log.Println("Requesting segment=", segment)
+
+		response, err := c.request(model.VideoPacketRequest{
+			Priority: priority,
+			Bitrate:  model.HIGH_BITRATE,
+			Segment:  segment,
+			Tile:     1,
+		})
 		if err != nil {
 			log.Println(err)
 			return
 		}
+		if len(response.Data) == 0 {
+			log.Println("empty response")
+			return
+		}
 
-		log.Println(response)
+		log.Println("Response received for segment=", segment)
 	}()
 }
 

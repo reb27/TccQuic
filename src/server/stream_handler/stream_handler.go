@@ -50,13 +50,13 @@ func (s *StreamHandler) HandleStream(stream quic.Stream) {
 func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketRequest) {
 	defer stream.Close()
 
-	log.Println("i:", req.Segment)
+	log.Println("handleRequest segment =", req.Segment)
 	// read file
 	data := s.readFile(req.Bitrate, req.Segment, req.Tile)
 
 	// send file response
 	s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
-	log.Println("i:", req.Segment)
+	log.Println("Response sent")
 }
 
 // Read file
@@ -68,8 +68,6 @@ func (s *StreamHandler) readFile(bitrate model.Bitrate, segment int, tile int) [
 	// TODO check the file name logic
 	//data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s", bitrate, segment, tile))
 	data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_10_dash_track10_%d.m4s", segment))
-
-	fmt.Printf("tile")
 	if err != nil {
 		log.Println(err)
 	}
