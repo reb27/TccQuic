@@ -2,22 +2,57 @@
 
 PROGRAM_NAME=$0
 showUsage() {
-    echo "Uso: $PROGRAM_NAME <IP>"
+    echo "Usage: $PROGRAM_NAME [OPTIONS] <IP>"
+    echo "OPTIONS:"
+    echo "--fifo, --sp, --wfq     Select server mode (default: fifo)"
+    echo "--sbw N                 Select server bandwidth in Mbps"
+    echo "--cbw N                 Select client bandwidth in Mbps"
+    echo "-o DIR                  Select output directory"
 }
 
-if [[ "$#" != 1 ]]; then
+SERVER_MODE="fifo"
+SERVER_BW="1000"
+CLIENT_BW="1000"
+IP=
+LOG_DIR=
+
+while [[ "$#" > 0 ]]; do
+    case "$1" in
+    --fifo) SERVER_MODE="fifo" ; shift   ;;
+    --sp)   SERVER_MODE="sp"   ; shift   ;;
+    --wfq)  SERVER_MODE="wfq"  ; shift   ;;
+    --sbw)  SERVER_BW="$2"     ; shift 2 ;;
+    --cbw)  CLIENT_BW="$2"     ; shift 2 ;;
+    -o)     LOG_DIR="$2"       ; shift 2 ;;
+    -*)     showUsage ; exit 1 ; shift   ;;
+    *)      IP="$1"            ; shift   ;;
+    esac
+done
+
+if [[ -z $IP ]]; then
     showUsage
     exit 1
 fi
 
-IP=$1
-
 ############################################################################
+
+cd -- "$( dirname -- "${BASH_SOURCE[0]}" )"
 
 PURPLE='\033[0;35m'
 NC='\033[0m'
 
-cd -- "$( dirname -- "${BASH_SOURCE[0]}" )"
+if [[ -z "$LOG_DIR" ]]; then
+    LOG_NUMBER=1
+    while true; do
+        LOG_DIR=$(printf "../../logs/%s/%s-sbw%s-cbw%s-%03d/" \
+            $(basename "${PROGRAM_NAME%.*}") $SERVER_MODE $SERVER_BW \
+            $CLIENT_BW $LOG_NUMBER)
+        if [[ ! -e "$LOG_DIR" ]]; then
+            break
+        fi
+        LOG_NUMBER=$((LOG_NUMBER+1))
+    done
+fi
 
 # withSSH COMMAND ...
 withSSH() {
@@ -51,6 +86,18 @@ upload() {
     fi
 }
 
+# download SOURCE DESTINATION
+download() {
+    rsync -a "mininet@$IP:$1" "$2"
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE != 0 ]]; then
+        echo
+        echo "scp download failed!"
+        echo
+        exit $EXIT_CODE
+    fi
+}
+
 REMOTE_DIR=/tmp/server_scheduler_test
 
 echo -e "${PURPLE}Compiling...${NC}"
@@ -71,9 +118,18 @@ upload "resources/utils.py" "$REMOTE_DIR"
 
 echo -e "${PURPLE}Executing...${NC}"
 
-withSSH "chmod +x $REMOTE_DIR/server_scheduler_test.py && \
-         sudo $REMOTE_DIR/server_scheduler_test.py"
+withSSH "cd $REMOTE_DIR && \
+        sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
+            CLIENT_BW='$CLIENT_BW' \
+            ./server_scheduler_test.py 2>&1 | tee stdout"
 EXIT_CODE=$?
-if [[ $EXIT_CODE != 0 ]]; then
-    exit $EXIT_CODE
-fi
+echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
+
+mkdir -p "$LOG_DIR"
+download "$REMOTE_DIR/stdout" "$LOG_DIR"
+download "$REMOTE_DIR/*.csv" "$LOG_DIR"
+
+resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
+    "$LOG_DIR/figure.png"
+
+echo -e "${PURPLE}Logs: $(cd "$LOG_DIR" && pwd)${NC}"

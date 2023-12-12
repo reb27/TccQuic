@@ -9,12 +9,16 @@ import os, subprocess
 from subprocess import Popen
 from utils import HostParams, NetParams, createMininet
 
+SERVER_MODE = os.environ['SERVER_MODE']
+SERVER_BW = float(os.environ['SERVER_BW'])
+CLIENT_BW = float(os.environ['CLIENT_BW'])
+
 class Test():
-    def __init__(self, bw: str, server_policy: str):
-        print('bw=%d, server_policy=%s' % (bw, server_policy))
-        net, server, clients = createMininet(NetParams(clients=[
-            HostParams(bw=bw)]))
-        self.server_policy: str = server_policy
+    def __init__(self):
+        net, server, clients = createMininet(NetParams(
+            server=HostParams(bw=SERVER_BW),
+            clients=[HostParams(bw=CLIENT_BW)]))
+        self.server_policy: str = SERVER_MODE
         self.net: Mininet = net
         self.server: Host = server
         self.client: Host = clients[0]
@@ -61,6 +65,4 @@ class Test():
             process.terminate()
         self.net.stop()
 
-##############################################################################
-
-Test(bw=100, server_policy='fifo').run()
+Test().run()

@@ -1,4 +1,5 @@
 from mininet.topo import Topo
+from mininet.link import TCLink
 from mininet.net import Mininet, Host
 
 class HostParams:
@@ -18,12 +19,12 @@ class _TestTopo(Topo):
         switch = self.addSwitch('s0')
 
         host = self.addHost('h0')
-        self.addLink(host, switch, bw=params.server.bw,
+        self.addLink(host, switch, cls=TCLink, bw=params.server.bw,
                      delay=params.server.delay, loss=params.server.loss)
 
         for i in range(len(params.clients)):
             host = self.addHost('h%s' % (i + 1))
-            self.addLink(host, switch, bw=params.clients[i].bw,
+            self.addLink(host, switch, cls=TCLink, bw=params.clients[i].bw,
                          delay=params.clients[i].delay,
                          loss=params.clients[i].loss)
 

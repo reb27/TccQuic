@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"main/src/model"
+	"os"
 	"sync"
 	"time"
 
@@ -18,10 +19,11 @@ import (
 type Client struct {
 	serverURL  string
 	serverPort int
-	waitGroup  sync.WaitGroup
 
 	connection quic.Connection
 }
+
+const maxConcurrentRequests = 20
 
 func NewClient(serverURL string, serverPort int) *Client {
 	return &Client{
@@ -54,47 +56,59 @@ func (c *Client) Start() {
 	log.Println("Connected")
 	c.connection = connection
 
-	for i := 0; i < 3; i++ {
+	waitGroup := sync.WaitGroup{}
+
+	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
+	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
+	statisticsLogger := NewStatisticsLogger(statisticsPath)
+
+	startTime := time.Now()
+
+	for i := 0; i < 120; i++ {
 		priority := model.LOW_PRIORITY
 		if i%6 == 0 {
 			priority = model.HIGH_PRIORITY
 		}
 
-		c.spawnRequest(priority, i+1)
+		segment := i + 1
+
+		bufferSemaphore.Acquire()
+		waitGroup.Add(1)
+
+		go func() {
+			defer waitGroup.Done()
+			defer bufferSemaphore.Release()
+
+			log.Println("Requesting segment=", segment)
+
+			request := model.VideoPacketRequest{
+				Priority: priority,
+				Bitrate:  model.HIGH_BITRATE,
+				Segment:  segment,
+				Tile:     1,
+			}
+
+			requestTime := time.Now()
+			response, err := c.request(request)
+			responseTime := time.Now()
+
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			if len(response.Data) == 0 {
+				log.Panicln("empty response")
+			}
+
+			log.Println("Response received for segment=", segment)
+			statisticsLogger.Log(requestTime.Sub(startTime), request,
+				responseTime.Sub(requestTime))
+		}()
 	}
 
-	c.waitResponses()
-}
+	statisticsLogger.Close()
 
-func (c *Client) spawnRequest(priority model.Priority, segment int) {
-	c.waitGroup.Add(1)
-
-	go func() {
-		defer c.waitGroup.Done()
-
-		log.Println("Requesting segment=", segment)
-
-		response, err := c.request(model.VideoPacketRequest{
-			Priority: priority,
-			Bitrate:  model.HIGH_BITRATE,
-			Segment:  segment,
-			Tile:     1,
-		})
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		if len(response.Data) == 0 {
-			log.Println("empty response")
-			return
-		}
-
-		log.Println("Response received for segment=", segment)
-	}()
-}
-
-func (c *Client) waitResponses() {
-	c.waitGroup.Wait()
+	waitGroup.Wait()
 }
 
 func (c *Client) request(r model.VideoPacketRequest) (response model.VideoPacketResponse, err error) {
