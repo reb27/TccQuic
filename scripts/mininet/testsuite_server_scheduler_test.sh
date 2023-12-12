@@ -18,7 +18,7 @@ LOG_NUMBER=1
 while true; do
     SUPER_LOG_DIR=$(printf "../../logs/%s-%03d/" \
         $(basename "${PROGRAM_NAME%.*}") $LOG_NUMBER)
-    if [[ ! -e "$LOG_DIR" ]]; then
+    if [[ ! -e "$SUPER_LOG_DIR" ]]; then
         break
     fi
     LOG_NUMBER=$((LOG_NUMBER+1))

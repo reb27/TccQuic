@@ -23,7 +23,7 @@ type Client struct {
 	connection quic.Connection
 }
 
-const maxConcurrentRequests = 20
+const maxConcurrentRequests = 10
 
 func NewClient(serverURL string, serverPort int) *Client {
 	return &Client{

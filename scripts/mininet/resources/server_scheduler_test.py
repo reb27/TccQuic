@@ -13,6 +13,10 @@ SERVER_MODE = os.environ['SERVER_MODE']
 SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
 
+print('SERVER_MODE=', SERVER_MODE)
+print('SERVER_BW=', SERVER_BW)
+print('CLIENT_BW=', CLIENT_BW)
+
 class Test():
     def __init__(self):
         net, server, clients = createMininet(NetParams(
