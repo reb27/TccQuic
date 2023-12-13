@@ -12,16 +12,20 @@ from utils import HostParams, NetParams, createMininet
 SERVER_MODE = os.environ['SERVER_MODE']
 SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
+SERVER_LOSS = float(os.environ['SERVER_LOSS'])
+CLIENT_LOSS = float(os.environ['CLIENT_LOSS'])
 
 print('SERVER_MODE=', SERVER_MODE)
 print('SERVER_BW=', SERVER_BW)
 print('CLIENT_BW=', CLIENT_BW)
+print('SERVER_LOSS=', SERVER_LOSS)
+print('CLIENT_LOSS=', CLIENT_LOSS)
 
 class Test():
     def __init__(self):
         net, server, clients = createMininet(NetParams(
-            server=HostParams(bw=SERVER_BW),
-            clients=[HostParams(bw=CLIENT_BW)]))
+            server=HostParams(bw=SERVER_BW, loss=SERVER_LOSS),
+            clients=[HostParams(bw=CLIENT_BW, loss=CLIENT_LOSS)]))
         self.server_policy: str = SERVER_MODE
         self.net: Mininet = net
         self.server: Host = server

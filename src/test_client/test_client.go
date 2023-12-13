@@ -56,13 +56,19 @@ func (c *Client) Start() {
 	log.Println("Connected")
 	c.connection = connection
 
+	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
+
+	statisticsLogger := NewStatisticsLogger(statisticsPath)
+	c.runTestIteration(statisticsLogger)
+	statisticsLogger.Close()
+}
+
+func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
+	startTime := time.Now()
+
 	waitGroup := sync.WaitGroup{}
 
 	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
-	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
-	statisticsLogger := NewStatisticsLogger(statisticsPath)
-
-	startTime := time.Now()
 
 	for i := 0; i < 120; i++ {
 		priority := model.LOW_PRIORITY
@@ -101,12 +107,12 @@ func (c *Client) Start() {
 			}
 
 			log.Println("Response received for segment=", segment)
-			statisticsLogger.Log(requestTime.Sub(startTime), request,
-				responseTime.Sub(requestTime))
+			if statisticsLogger != nil {
+				statisticsLogger.Log(requestTime.Sub(startTime), request,
+					responseTime.Sub(requestTime))
+			}
 		}()
 	}
-
-	statisticsLogger.Close()
 
 	waitGroup.Wait()
 }

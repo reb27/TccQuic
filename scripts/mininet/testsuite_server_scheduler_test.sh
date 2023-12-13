@@ -25,12 +25,15 @@ while true; do
 done
 
 for SBW in 10 100; do
-    for CBW in 0.5 1 10 100; do
-        for M in fifo sp wfq; do
-            LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" printf "%s/sbw%s-cbw%s-%s/" \
-                $SUPER_LOG_DIR $SBW $CBW $M)
-            ./server_scheduler_test.sh -o $LOG_DIR --$M --sbw $SBW --cbw $CBW \
-                "$IP"
+    for CBW in 1 10 100; do
+        for LOSS in 00 01 10; do
+            for M in fifo sp wfq; do
+                LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
+                    printf "%s/sbw%s-cbw%s-loss%s/%s/" \
+                    $SUPER_LOG_DIR $SBW $CBW $LOSS $M)
+                ./server_scheduler_test.sh -o $LOG_DIR \
+                    --$M --sbw $SBW --cbw $CBW --loss $LOSS "$IP"
+            done
         done
     done
 done
