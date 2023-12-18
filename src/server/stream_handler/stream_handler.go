@@ -12,7 +12,7 @@ import (
 
 // This class is responsible for handling incoming streams
 type StreamHandler struct {
-	taskScheduler *TaskScheduler
+	taskScheduler TaskScheduler
 }
 
 func NewStreamHandler(policy QueuePolicy) *StreamHandler {
@@ -39,7 +39,7 @@ func (s *StreamHandler) HandleStream(stream quic.Stream) {
 	}
 
 	// enqueue request processing
-	ok := s.taskScheduler.Enqueue(int(req.Priority), func() {
+	ok := s.taskScheduler.Enqueue(req.Priority, func() {
 		s.handleRequest(stream, req)
 	})
 	if !ok {

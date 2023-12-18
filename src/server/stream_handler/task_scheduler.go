@@ -18,7 +18,94 @@ const (
 	WeightedFairQueue   QueuePolicy = "wfq"
 )
 
-type TaskScheduler struct {
+type TaskScheduler interface {
+	Stop()
+	Enqueue(priority model.Priority, task func()) bool
+	Run()
+}
+
+func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
+	if policy == FifoQueue {
+		return newFifoTaskScheduler()
+	} else {
+		return newPriorityTaskScheduler(policy)
+	}
+}
+
+// FIFO Task Scheduler
+
+type fifoTaskScheduler struct {
+	scheduler scheduler.Scheduler[func()]
+
+	mutex     *sync.Mutex
+	cond      *sync.Cond
+	isStopped bool
+}
+
+func newFifoTaskScheduler() *fifoTaskScheduler {
+	sc := scheduler.NewFIFO[func()](maxTasksPerPriorityLevel * model.PRIORITY_LEVEL_COUNT)
+
+	mutex := &sync.Mutex{}
+	cond := sync.NewCond(mutex)
+
+	return &fifoTaskScheduler{
+		scheduler: sc,
+
+		mutex:     mutex,
+		cond:      cond,
+		isStopped: false,
+	}
+}
+
+func (fs *fifoTaskScheduler) Stop() {
+	fs.mutex.Lock()
+
+	fs.isStopped = true
+
+	fs.mutex.Unlock()
+	fs.cond.Broadcast()
+
+}
+
+func (fs *fifoTaskScheduler) Enqueue(priority model.Priority, task func()) bool {
+	fs.mutex.Lock()
+
+	entry := fs.scheduler.CreateEntry(task)
+	ok := entry != nil
+	if ok {
+		ok = entry.Enqueue()
+	}
+
+	fs.mutex.Unlock()
+	fs.cond.Broadcast()
+
+	return ok
+}
+
+func (fs *fifoTaskScheduler) Run() {
+	fs.mutex.Lock()
+
+	for !fs.isStopped {
+		entry := fs.scheduler.Dequeue()
+		if entry == nil {
+			fs.cond.Wait()
+			continue
+		}
+
+		task := entry.UserData()
+
+		// Execute task outside mutex
+		fs.mutex.Unlock()
+		task()
+		fs.mutex.Lock()
+	}
+
+	fs.mutex.Unlock()
+}
+
+// Priority Task Scheduler
+
+type priorityTaskScheduler struct {
 	groups    []*priorityGroup
 	scheduler scheduler.Scheduler[int]
 
@@ -44,11 +131,9 @@ func getPriority(priorityGroup model.Priority) float32 {
 	}
 }
 
-func NewTaskScheduler(policy QueuePolicy) *TaskScheduler {
+func newPriorityTaskScheduler(policy QueuePolicy) *priorityTaskScheduler {
 	var sc scheduler.Scheduler[int]
 	switch policy {
-	case FifoQueue:
-		sc = scheduler.NewFIFO[int](model.PRIORITY_LEVEL_COUNT)
 	case StrictPriorityQueue:
 		sc = scheduler.NewSP[int](model.PRIORITY_LEVEL_COUNT)
 	case WeightedFairQueue:
@@ -69,7 +154,7 @@ func NewTaskScheduler(policy QueuePolicy) *TaskScheduler {
 	mutex := &sync.Mutex{}
 	cond := sync.NewCond(mutex)
 
-	return &TaskScheduler{
+	return &priorityTaskScheduler{
 		groups:    groups,
 		scheduler: sc,
 
@@ -79,7 +164,7 @@ func NewTaskScheduler(policy QueuePolicy) *TaskScheduler {
 	}
 }
 
-func (ps *TaskScheduler) Stop() {
+func (ps *priorityTaskScheduler) Stop() {
 	ps.mutex.Lock()
 
 	ps.isStopped = true
@@ -89,7 +174,9 @@ func (ps *TaskScheduler) Stop() {
 
 }
 
-func (ps *TaskScheduler) Enqueue(priorityGroupId int, task func()) bool {
+func (ps *priorityTaskScheduler) Enqueue(priority model.Priority, task func()) bool {
+	priorityGroupId := int(priority)
+
 	ps.mutex.Lock()
 
 	if priorityGroupId < 0 || priorityGroupId > model.PRIORITY_LEVEL_COUNT-1 {
@@ -113,7 +200,7 @@ func (ps *TaskScheduler) Enqueue(priorityGroupId int, task func()) bool {
 	return ok
 }
 
-func (ps *TaskScheduler) Run() {
+func (ps *priorityTaskScheduler) Run() {
 	ps.mutex.Lock()
 
 	for !ps.isStopped {
