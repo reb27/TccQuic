@@ -52,7 +52,7 @@ func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketR
 
 	log.Println("handleRequest segment =", req.Segment)
 	// read file
-	data := s.readFile(req.Bitrate, req.Segment, req.Tile)
+	data := s.readFile(req)
 
 	// send file response
 	s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
@@ -60,14 +60,16 @@ func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketR
 }
 
 // Read file
-func (s *StreamHandler) readFile(bitrate model.Bitrate, segment int, tile int) []byte {
+func (s *StreamHandler) readFile(req model.VideoPacketRequest) []byte {
 	basePath, err := os.Getwd()
 	if err != nil {
 		log.Println(err)
 	}
 	// TODO check the file name logic
 	//data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s", bitrate, segment, tile))
-	data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_10_dash_track10_%d.m4s", segment))
+	filePath := fmt.Sprintf("/data/segments/video_tiled_10_dash_track%d_%d.m4s",
+		req.Segment, req.Tile)
+	data, err := os.ReadFile(basePath + filePath)
 	if err != nil {
 		log.Println(err)
 	}

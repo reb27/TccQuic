@@ -7,16 +7,18 @@ import (
 	"log"
 	"main/src/model"
 	"os"
+	"sync"
 	"time"
 )
 
 type StatisticsLogger struct {
 	fileWriter *bufio.Writer
+	mutex      sync.Mutex
 	file       fs.File
 }
 
 func NewStatisticsLogger(path string) *StatisticsLogger {
-	const header string = "time_ns,segment,priority,latency_ns\n"
+	const header string = "time_ns,segment,tile,priority,latency_ns\n"
 
 	file, err := os.Create(path)
 	if err != nil {
@@ -28,23 +30,30 @@ func NewStatisticsLogger(path string) *StatisticsLogger {
 		log.Panicf("Failed to write to %s: %s\n", path, err)
 	}
 
-	return &StatisticsLogger{
-		fileWriter,
-		file,
-	}
+	s := new(StatisticsLogger)
+	s.fileWriter = fileWriter
+	s.file = file
+
+	return s
 }
 
 func (s *StatisticsLogger) Log(timeFromStart time.Duration,
 	r model.VideoPacketRequest, latency time.Duration) {
-	row := fmt.Sprintf("%d,%d,%d,%d\n", timeFromStart.Nanoseconds(),
-		r.Segment, r.Priority, latency.Nanoseconds())
+	s.mutex.Lock()
+
+	row := fmt.Sprintf("%d,%d,%d,%d,%d\n", timeFromStart.Nanoseconds(),
+		r.Segment, r.Tile, r.Priority, latency.Nanoseconds())
 
 	if _, err := s.fileWriter.WriteString(row); err != nil {
 		log.Panicf("Failed to write: %s\n", err)
 	}
+
+	s.mutex.Unlock()
 }
 
 func (s *StatisticsLogger) Close() {
+	s.mutex.Lock()
 	s.fileWriter.Flush()
 	s.file.Close()
+	s.mutex.Unlock()
 }

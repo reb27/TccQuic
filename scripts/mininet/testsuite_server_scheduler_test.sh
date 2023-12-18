@@ -24,6 +24,8 @@ while true; do
     LOG_NUMBER=$((LOG_NUMBER+1))
 done
 
+mkdir -p "$SUPER_LOG_DIR"
+
 for SBW in 10 100; do
     for CBW in 1 10 100; do
         for LOSS in 00 01 10; do

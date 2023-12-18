@@ -23,7 +23,8 @@ type Client struct {
 	connection quic.Connection
 }
 
-const maxConcurrentRequests = 10
+const maxConcurrentRequests = 128
+const priorityN = 6 // priority tile every n tiles
 
 func NewClient(serverURL string, serverPort int) *Client {
 	return &Client{
@@ -70,48 +71,50 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 
 	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
 
-	for i := 0; i < 120; i++ {
-		priority := model.LOW_PRIORITY
-		if i%6 == 0 {
-			priority = model.HIGH_PRIORITY
+	for iSegment := 10; iSegment <= 16; iSegment++ {
+		for iTile := 1; iTile <= 120; iTile++ {
+			tile, segment := iTile, iSegment
+
+			priority := model.LOW_PRIORITY
+			if tile%priorityN == 0 {
+				priority = model.HIGH_PRIORITY
+			}
+
+			bufferSemaphore.Acquire()
+			waitGroup.Add(1)
+
+			go func() {
+				defer waitGroup.Done()
+				defer bufferSemaphore.Release()
+
+				log.Printf("Requesting (%d, %d)\n", tile, segment)
+
+				request := model.VideoPacketRequest{
+					Priority: priority,
+					Bitrate:  model.HIGH_BITRATE,
+					Segment:  segment,
+					Tile:     tile,
+				}
+
+				requestTime := time.Now()
+				response, err := c.request(request)
+				responseTime := time.Now()
+
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				if len(response.Data) == 0 {
+					log.Panicln("empty response")
+				}
+
+				log.Printf("Response received for (%d, %d)\n", tile, segment)
+				if statisticsLogger != nil {
+					statisticsLogger.Log(requestTime.Sub(startTime), request,
+						responseTime.Sub(requestTime))
+				}
+			}()
 		}
-
-		segment := i + 1
-
-		bufferSemaphore.Acquire()
-		waitGroup.Add(1)
-
-		go func() {
-			defer waitGroup.Done()
-			defer bufferSemaphore.Release()
-
-			log.Println("Requesting segment=", segment)
-
-			request := model.VideoPacketRequest{
-				Priority: priority,
-				Bitrate:  model.HIGH_BITRATE,
-				Segment:  segment,
-				Tile:     1,
-			}
-
-			requestTime := time.Now()
-			response, err := c.request(request)
-			responseTime := time.Now()
-
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			if len(response.Data) == 0 {
-				log.Panicln("empty response")
-			}
-
-			log.Println("Response received for segment=", segment)
-			if statisticsLogger != nil {
-				statisticsLogger.Log(requestTime.Sub(startTime), request,
-					responseTime.Sub(requestTime))
-			}
-		}()
 	}
 
 	waitGroup.Wait()
