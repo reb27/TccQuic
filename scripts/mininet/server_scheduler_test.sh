@@ -121,15 +121,15 @@ upload "resources/utils.py" "$REMOTE_DIR"
 
 echo -e "${PURPLE}Executing...${NC}"
 
+mkdir -p "$LOG_DIR"
+
 withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' SERVER_LOSS='$LOSS' CLIENT_LOSS='$LOSS' \
-            ./server_scheduler_test.py 2>&1 | tee stdout"
+            ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 EXIT_CODE=$?
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
 
-mkdir -p "$LOG_DIR"
-download "$REMOTE_DIR/stdout" "$LOG_DIR"
 download "$REMOTE_DIR/*.csv" "$LOG_DIR"
 
 resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
