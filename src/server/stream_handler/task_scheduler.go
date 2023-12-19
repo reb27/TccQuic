@@ -123,7 +123,7 @@ type priorityGroup struct {
 func getPriority(priorityGroup model.Priority) float32 {
 	switch priorityGroup {
 	case model.HIGH_PRIORITY:
-		return 10.0
+		return 2.0
 	case model.LOW_PRIORITY:
 		return 1.0
 	default:
