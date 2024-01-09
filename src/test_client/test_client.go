@@ -17,22 +17,22 @@ import (
 )
 
 type Client struct {
-	serverURL  string
-	serverPort int
+	serverURL   string
+	serverPort  int
+	parallelism int
 
 	connection quic.Connection
 }
-
-const maxConcurrentRequests = 128
 
 // Proportion of each priority
 const mediumPriorityRatio = 1.0 / 3.0
 const highPriorityRatio = 1.0 / 3.0
 
-func NewClient(serverURL string, serverPort int) *Client {
+func NewClient(serverURL string, serverPort int, parallelism int) *Client {
 	return &Client{
-		serverURL:  serverURL,
-		serverPort: serverPort,
+		serverURL:   serverURL,
+		serverPort:  serverPort,
+		parallelism: parallelism,
 	}
 }
 
@@ -72,7 +72,7 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 
 	waitGroup := sync.WaitGroup{}
 
-	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
+	bufferSemaphore := NewSemaphore(c.parallelism)
 
 	counter := 0
 	counterMediumPriority := 0

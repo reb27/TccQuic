@@ -5,6 +5,7 @@ import (
 	"main/src/server"
 	"main/src/test_client"
 	"os"
+	"strconv"
 )
 
 func main() {
@@ -16,15 +17,23 @@ func main() {
 		client := client.NewClient(url, port)
 		client.Start()
 	} else if arg == "server" {
+		// Uso: main server <wfq|sp|fifo>
+
 		queuePolicy := os.Args[2]
 		server := server.NewServer("0.0.0.0", port, queuePolicy)
 		server.Start()
 	} else if arg == "test-client" {
+		// Uso: main test-client [ip] parallelism
+
 		if len(os.Args) > 1 {
 			url = os.Args[2]
 		}
+		parallelism := 128
+		if len(os.Args) > 2 {
+			parallelism, _ = strconv.Atoi(os.Args[3])
+		}
 
-		client := test_client.NewClient(url, port)
+		client := test_client.NewClient(url, port, parallelism)
 		client.Start()
 	}
 }

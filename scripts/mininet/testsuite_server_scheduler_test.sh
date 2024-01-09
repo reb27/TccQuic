@@ -29,12 +29,15 @@ mkdir -p "$SUPER_LOG_DIR"
 for SBW in 100; do
     for CBW in 100; do
         for LOSS in 2; do
-            for M in fifo sp wfq; do
-                LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
-                    printf "%s/sbw%s-cbw%s-loss%s/%s/" \
-                    $SUPER_LOG_DIR $SBW $CBW $LOSS $M)
-                ./server_scheduler_test.sh -o $LOG_DIR \
-                    --$M --sbw $SBW --cbw $CBW --loss $LOSS "$IP"
+            for PARALELLISM in 1 2 4 8 16 32 64 128; do
+                for M in fifo sp wfq; do
+                    LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
+                        printf "%s/sbw%s-cbw%s-loss%s-parallelism%d/%s/" \
+                        $SUPER_LOG_DIR $SBW $CBW $LOSS $PARALELLISM $M)
+                    ./server_scheduler_test.sh -o $LOG_DIR \
+                        --$M --sbw $SBW --cbw $CBW --loss $LOSS \
+                        -p $PARALELLISM "$IP"
+                done
             done
         done
     done

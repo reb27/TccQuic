@@ -14,12 +14,14 @@ SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
 SERVER_LOSS = float(os.environ['SERVER_LOSS'])
 CLIENT_LOSS = float(os.environ['CLIENT_LOSS'])
+PARALELLISM = int(os.environ['PARALELLISM'])
 
 print('SERVER_MODE=', SERVER_MODE)
 print('SERVER_BW=', SERVER_BW)
 print('CLIENT_BW=', CLIENT_BW)
 print('SERVER_LOSS=', SERVER_LOSS)
 print('CLIENT_LOSS=', CLIENT_LOSS)
+print('PARALELLISM=', PARALELLISM)
 
 class Test():
     def __init__(self):
@@ -55,7 +57,7 @@ class Test():
             stderr=subprocess.STDOUT)
         # Start client
         self.processes[self.client] = self.client.popen(
-            [dir + '/main', 'test-client', self.server.IP()],
+            [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM)],
             cwd=dir,
             stderr=subprocess.STDOUT)
         

@@ -8,6 +8,7 @@ showUsage() {
     echo "--sbw N                 Select server bandwidth in Mbps"
     echo "--cbw N                 Select client bandwidth in Mbps"
     echo "--loss N                Select loss in %"
+    echo "-p N                    Select paralellism"
     echo "-o DIR                  Select output directory"
 }
 
@@ -15,6 +16,7 @@ SERVER_MODE="fifo"
 SERVER_BW="100"
 CLIENT_BW="100"
 LOSS="2"
+PARALELLISM="128"
 IP=
 LOG_DIR=
 
@@ -25,7 +27,8 @@ while [[ "$#" > 0 ]]; do
     --wfq)  SERVER_MODE="wfq"  ; shift   ;;
     --sbw)  SERVER_BW="$2"     ; shift 2 ;;
     --cbw)  CLIENT_BW="$2"     ; shift 2 ;;
-    --loss) LOSS="$2"     ; shift 2 ;;
+    --loss) LOSS="$2"          ; shift 2 ;;
+    -p)     PARALELLISM="$2"   ; shift 2 ;;
     -o)     LOG_DIR="$2"       ; shift 2 ;;
     -*)     showUsage ; exit 1 ; shift   ;;
     *)      IP="$1"            ; shift   ;;
@@ -126,6 +129,7 @@ mkdir -p "$LOG_DIR"
 withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' SERVER_LOSS='$LOSS' CLIENT_LOSS='$LOSS' \
+            PARALELLISM='$PARALELLISM' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 EXIT_CODE=$?
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
