@@ -27,8 +27,8 @@ done
 mkdir -p "$SUPER_LOG_DIR"
 
 for SBW in 100; do
-    for CBW in 10 100; do
-        for LOSS in 0 2; do
+    for CBW in 100; do
+        for LOSS in 2; do
             for M in fifo sp wfq; do
                 LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
                     printf "%s/sbw%s-cbw%s-loss%s/%s/" \

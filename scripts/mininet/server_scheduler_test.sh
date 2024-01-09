@@ -12,9 +12,9 @@ showUsage() {
 }
 
 SERVER_MODE="fifo"
-SERVER_BW="1000"
-CLIENT_BW="1000"
-LOSS="0"
+SERVER_BW="100"
+CLIENT_BW="100"
+LOSS="2"
 IP=
 LOG_DIR=
 

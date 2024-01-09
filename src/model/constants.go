@@ -4,10 +4,11 @@ type Priority int
 
 const (
 	HIGH_PRIORITY Priority = iota
+	MEDIUM_PRIORITY
 	LOW_PRIORITY
 )
 
-const PRIORITY_LEVEL_COUNT int = 2
+const PRIORITY_LEVEL_COUNT int = int(LOW_PRIORITY) + 1
 
 type Bitrate int
 

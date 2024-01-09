@@ -24,7 +24,10 @@ type Client struct {
 }
 
 const maxConcurrentRequests = 128
-const priorityN = 2 // priority tile every n tiles
+
+// Proportion of each priority
+const mediumPriorityRatio = 1.0 / 3.0
+const highPriorityRatio = 1.0 / 3.0
 
 func NewClient(serverURL string, serverPort int) *Client {
 	return &Client{
@@ -71,14 +74,23 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 
 	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
 
+	counter := 0
+	counterMediumPriority := 0
+	counterHighPriority := 0
+
 	for iSegment := 100; iSegment <= 177; iSegment++ {
 		for iTile := 1; iTile <= 120; iTile++ {
 			tile, segment := iTile, iSegment
 
 			priority := model.LOW_PRIORITY
-			if tile%priorityN == 0 {
+			if float64(counterHighPriority)/float64(counter) < highPriorityRatio {
 				priority = model.HIGH_PRIORITY
+				counterHighPriority++
+			} else if float64(counterMediumPriority)/float64(counter) < mediumPriorityRatio {
+				priority = model.MEDIUM_PRIORITY
+				counterMediumPriority++
 			}
+			counter++
 
 			bufferSemaphore.Acquire()
 			waitGroup.Add(1)
