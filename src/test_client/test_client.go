@@ -3,9 +3,9 @@
 package test_client
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"log"
 	"main/src/model"
@@ -24,7 +24,7 @@ type Client struct {
 }
 
 const maxConcurrentRequests = 128
-const priorityN = 6 // priority tile every n tiles
+const priorityN = 2 // priority tile every n tiles
 
 func NewClient(serverURL string, serverPort int) *Client {
 	return &Client{
@@ -71,7 +71,7 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 
 	bufferSemaphore := NewSemaphore(maxConcurrentRequests)
 
-	for iSegment := 10; iSegment <= 16; iSegment++ {
+	for iSegment := 100; iSegment <= 177; iSegment++ {
 		for iTile := 1; iTile <= 120; iTile++ {
 			tile, segment := iTile, iSegment
 
@@ -101,7 +101,6 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 				responseTime := time.Now()
 
 				if err != nil {
-					log.Println(err)
 					return
 				}
 				if len(response.Data) == 0 {
@@ -120,20 +119,28 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 	waitGroup.Wait()
 }
 
-func (c *Client) request(r model.VideoPacketRequest) (response model.VideoPacketResponse, err error) {
+func (c *Client) request(r model.VideoPacketRequest) (res *model.VideoPacketResponse, err error) {
 	stream, err := c.connection.OpenStreamSync(context.Background())
 	if err != nil {
+		log.Println("Open stream failed: ", err)
 		return
 	}
 	defer stream.Close()
 
-	if err = json.NewEncoder(stream).Encode(&r); err != nil {
-		log.Println("Request encode failed: ", err)
+	// Request
+
+	if err = r.Write(stream); err != nil {
+		log.Println("Write failed: ", err)
 		return
 	}
-	if err = json.NewDecoder(stream).Decode(&response); err != nil {
-		log.Println("Response decode failed: ", err)
+
+	// Response
+
+	reader := bufio.NewReader(stream)
+	if res, err = model.ReadVideoPacketResponse(reader); err != nil {
+		log.Println("Read failed: ", err)
 		return
 	}
+
 	return
 }

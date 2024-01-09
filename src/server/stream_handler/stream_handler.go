@@ -1,7 +1,7 @@
 package stream_handler
 
 import (
-	"encoding/json"
+	"bufio"
 	"fmt"
 	"log"
 	"main/src/model"
@@ -31,9 +31,9 @@ func (s *StreamHandler) Stop() {
 
 func (s *StreamHandler) HandleStream(stream quic.Stream) {
 	// receive file request
-	req := s.receiveData(stream)
-	if req == (model.VideoPacketRequest{}) {
-		log.Println("Invalid request")
+	req, err := model.ReadVideoPacketRequest(bufio.NewReader(stream))
+	if err != nil {
+		log.Println(err)
 		stream.Close()
 		return
 	}
@@ -44,10 +44,11 @@ func (s *StreamHandler) HandleStream(stream quic.Stream) {
 	})
 	if !ok {
 		log.Println("Task enqueue failed")
+		stream.Close()
 	}
 }
 
-func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketRequest) {
+func (s *StreamHandler) handleRequest(stream quic.Stream, req *model.VideoPacketRequest) {
 	defer stream.Close()
 
 	log.Println("handleRequest segment =", req.Segment)
@@ -55,12 +56,22 @@ func (s *StreamHandler) handleRequest(stream quic.Stream, req model.VideoPacketR
 	data := s.readFile(req)
 
 	// send file response
-	s.sendData(stream, req.Priority, req.Bitrate, req.Segment, req.Tile, data)
-	log.Println("Response sent")
+	res := model.VideoPacketResponse{
+		Priority: req.Priority,
+		Bitrate:  req.Bitrate,
+		Segment:  req.Segment,
+		Tile:     req.Tile,
+		Data:     data,
+	}
+	if err := res.Write(stream); err != nil {
+		log.Println(err)
+	} else {
+		log.Println("Response sent")
+	}
 }
 
 // Read file
-func (s *StreamHandler) readFile(req model.VideoPacketRequest) []byte {
+func (s *StreamHandler) readFile(req *model.VideoPacketRequest) []byte {
 	basePath, err := os.Getwd()
 	if err != nil {
 		log.Println(err)
@@ -74,30 +85,4 @@ func (s *StreamHandler) readFile(req model.VideoPacketRequest) []byte {
 		log.Println(err)
 	}
 	return data
-}
-
-// Receive file request
-func (s *StreamHandler) receiveData(stream quic.Stream) (req model.VideoPacketRequest) {
-	if err := json.NewDecoder(stream).Decode(&req); err != nil {
-		log.Println(err)
-	}
-	// streamId := stream.StreamID()
-	// fmt.Printf("Server stream %d: Got '%+v'\n", streamId, req)
-	return
-}
-
-// Send file response
-func (s *StreamHandler) sendData(stream quic.Stream, priority model.Priority, bitrate model.Bitrate, segment int, tile int, data []byte) {
-	// streamId := stream.StreamID()
-	// fmt.Printf("Server stream %d: Sending '%+v'\n", streamId, res)
-	res := model.VideoPacketResponse{
-		Priority: priority,
-		Bitrate:  bitrate,
-		Segment:  segment,
-		Tile:     tile,
-		Data:     data,
-	}
-	if err := json.NewEncoder(stream).Encode(&res); err != nil {
-		log.Println(err)
-	}
 }
