@@ -5,34 +5,38 @@
 from mininet.net import Mininet, Host
 from mininet.log import setLogLevel
 from mininet.util import pmonitor
-import os, subprocess
+import os, signal, subprocess
 from subprocess import Popen
 from utils import HostParams, NetParams, createMininet
 
 SERVER_MODE = os.environ['SERVER_MODE']
 SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
-SERVER_LOSS = float(os.environ['SERVER_LOSS'])
-CLIENT_LOSS = float(os.environ['CLIENT_LOSS'])
+LOSS = float(os.environ['LOSS'])
 PARALELLISM = int(os.environ['PARALELLISM'])
+DELAY = float(os.environ['DELAY'])
+LOAD = float(os.environ['LOAD'])
 
 print('SERVER_MODE=', SERVER_MODE)
 print('SERVER_BW=', SERVER_BW)
 print('CLIENT_BW=', CLIENT_BW)
-print('SERVER_LOSS=', SERVER_LOSS)
-print('CLIENT_LOSS=', CLIENT_LOSS)
+print('LOSS=', LOSS)
 print('PARALELLISM=', PARALELLISM)
+print('DELAY=', DELAY)
+print('LOAD=', LOAD)
 
 class Test():
     def __init__(self):
         net, server, clients = createMininet(NetParams(
-            server=HostParams(bw=SERVER_BW, loss=SERVER_LOSS),
-            clients=[HostParams(bw=CLIENT_BW, loss=CLIENT_LOSS)]))
+            server=HostParams(bw=SERVER_BW, delay=DELAY, loss=LOSS),
+            clients=[HostParams(bw=CLIENT_BW)]))
         self.server_policy: str = SERVER_MODE
         self.net: Mininet = net
         self.server: Host = server
         self.client: Host = clients[0]
         self.processes: 'dict[Host, Popen]' = {}
+        self.iperf_server: 'Popen | None' = None
+        self.iperf_client: 'Popen | None' = None
 
     def run(self):
         try:
@@ -46,6 +50,15 @@ class Test():
         if not self.net.waitConnected():
             raise RuntimeError('Failed to connect switches')
         setLogLevel('info')
+
+        if LOAD != 0.0:
+            load = '%dM' % (SERVER_BW * LOAD / 100)
+            print('Starting load: ' + load)
+            self.iperf_server = self.server.popen(
+                ['iperf', '-u', '-s', '-p', '5001'])
+            self.iperf_client = self.client.popen(
+                ['iperf', '-u', '-c', self.server.IP(), '-p', '5001',
+                 '-b', load, '-t', '99999'])
 
         print('Running test')
         dir = os.path.dirname(os.path.realpath(__file__))
@@ -73,6 +86,13 @@ class Test():
         setLogLevel('warning')
         for process in self.processes.values():
             process.terminate()
+        if self.iperf_client != None:
+            self.iperf_client.terminate()
+        if self.iperf_server != None:
+            self.iperf_server.terminate()
+            print('iperf server results:')
+            result, _ = self.iperf_server.communicate()
+            print(str(result, 'utf8'))
         self.net.stop()
 
 Test().run()

@@ -9,6 +9,8 @@ showUsage() {
     echo "--cbw N                 Select client bandwidth in Mbps"
     echo "--loss N                Select loss in %"
     echo "-p N                    Select paralellism"
+    echo "--delay N               Select delay"
+    echo "--load N                Select load %"
     echo "-o DIR                  Select output directory"
 }
 
@@ -17,6 +19,8 @@ SERVER_BW="100"
 CLIENT_BW="100"
 LOSS="2"
 PARALELLISM="128"
+DELAY="0"
+LOAD="0"
 IP=
 LOG_DIR=
 
@@ -29,6 +33,8 @@ while [[ "$#" > 0 ]]; do
     --cbw)  CLIENT_BW="$2"     ; shift 2 ;;
     --loss) LOSS="$2"          ; shift 2 ;;
     -p)     PARALELLISM="$2"   ; shift 2 ;;
+    --delay) DELAY="$2"        ; shift 2 ;;
+    --load) LOAD="$2"          ; shift 2 ;;
     -o)     LOG_DIR="$2"       ; shift 2 ;;
     -*)     showUsage ; exit 1 ; shift   ;;
     *)      IP="$1"            ; shift   ;;
@@ -128,8 +134,8 @@ mkdir -p "$LOG_DIR"
 
 withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
-            CLIENT_BW='$CLIENT_BW' SERVER_LOSS='$LOSS' CLIENT_LOSS='$LOSS' \
-            PARALELLISM='$PARALELLISM' \
+            CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
+            DELAY='$DELAY' LOAD='$LOAD' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 EXIT_CODE=$?
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
@@ -137,6 +143,6 @@ echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
 download "$REMOTE_DIR/*.csv" "$LOG_DIR"
 
 resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
-    "$LOG_DIR/figure.png"
+    "$LOG_DIR"
 
 echo -e "${PURPLE}Logs: $(cd "$LOG_DIR" && pwd)${NC}"
