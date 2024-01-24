@@ -3,76 +3,53 @@
 package test_client
 
 import (
-	"bufio"
-	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
 	"main/src/model"
 	"os"
 	"sync"
 	"time"
-
-	"github.com/lucas-clemente/quic-go"
 )
 
-type Client struct {
-	serverURL   string
-	serverPort  int
-	parallelism int
+// If pipeline = true, use the same stream for all requests.
+// If pipeline = false, use one stream for each request.
+const pipeline = false
 
-	connection quic.Connection
-}
-
-// Proportion of each priority
+// Proportion of medium priority
 const mediumPriorityRatio = 1.0 / 3.0
+
+// Proportion of high priority
 const highPriorityRatio = 1.0 / 3.0
 
-func NewClient(serverURL string, serverPort int, parallelism int) *Client {
-	return &Client{
-		serverURL:   serverURL,
-		serverPort:  serverPort,
-		parallelism: parallelism,
-	}
-}
+const requestTimeout = 1 * time.Minute
 
-func (c *Client) Start() {
-	url := fmt.Sprintf("%s:%d", c.serverURL, c.serverPort)
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"quic-streaming"},
-	}
-	config := &quic.Config{
-		MaxIdleTimeout:        500 * time.Minute, // Set a longer maximum idle timeout
-		HandshakeIdleTimeout:  100 * time.Second, // Set the receive connection flow control window size to 20 MB
-		MaxIncomingStreams:    20000,             // Set the maximum number of incoming streams
-		MaxIncomingUniStreams: 20000,             // Set the maximum number of incoming unidirectional streams
-	}
+func StartTestClient(serverURL string, serverPort int, parallelism int) {
+	client := NewClient(ClientOptions{
+		Pipeline:   pipeline,
+		ServerURL:  serverURL,
+		ServerPort: serverPort,
+		Timeout:    requestTimeout,
+	})
 
-	// Create new QUIC connection
-	log.Println("Connecting...")
-	connection, err := quic.DialAddr(url, tlsConf, config)
+	err := client.Connect()
 	if err != nil {
-		log.Println(err)
+		log.Println("failed to connect")
 		return
 	}
-
-	log.Println("Connected")
-	c.connection = connection
 
 	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
 
 	statisticsLogger := NewStatisticsLogger(statisticsPath)
-	c.runTestIteration(statisticsLogger)
+	runTestIteration(client, statisticsLogger, parallelism)
 	statisticsLogger.Close()
 }
 
-func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
+func runTestIteration(client *Client, statisticsLogger *StatisticsLogger, parallelism int) {
 	startTime := time.Now()
 
 	waitGroup := sync.WaitGroup{}
 
-	bufferSemaphore := NewSemaphore(c.parallelism)
+	bufferSemaphore := NewSemaphore(parallelism)
 
 	counter := 0
 	counterMediumPriority := 0
@@ -99,7 +76,7 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 				defer waitGroup.Done()
 				defer bufferSemaphore.Release()
 
-				log.Printf("Requesting (%d, %d)\n", tile, segment)
+				log.Printf("Requesting (%d, %d)\n", segment, tile)
 
 				request := model.VideoPacketRequest{
 					Priority: priority,
@@ -109,17 +86,18 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 				}
 
 				requestTime := time.Now()
-				response, err := c.request(request)
+				response := client.Request(request)
 				responseTime := time.Now()
 
-				if err != nil {
-					return
+				if response == nil {
+					log.Panicf("did not receive response for (%d, %d)\n",
+						segment, tile)
 				}
 				if len(response.Data) == 0 {
 					log.Panicln("empty response")
 				}
 
-				log.Printf("Response received for (%d, %d)\n", tile, segment)
+				log.Printf("Response received for (%d, %d)\n", segment, tile)
 				if statisticsLogger != nil {
 					statisticsLogger.Log(requestTime.Sub(startTime), request,
 						responseTime.Sub(requestTime))
@@ -129,30 +107,4 @@ func (c *Client) runTestIteration(statisticsLogger *StatisticsLogger) {
 	}
 
 	waitGroup.Wait()
-}
-
-func (c *Client) request(r model.VideoPacketRequest) (res *model.VideoPacketResponse, err error) {
-	stream, err := c.connection.OpenStreamSync(context.Background())
-	if err != nil {
-		log.Println("Open stream failed: ", err)
-		return
-	}
-	defer stream.Close()
-
-	// Request
-
-	if err = r.Write(stream); err != nil {
-		log.Println("Write failed: ", err)
-		return
-	}
-
-	// Response
-
-	reader := bufio.NewReader(stream)
-	if res, err = model.ReadVideoPacketResponse(reader); err != nil {
-		log.Println("Read failed: ", err)
-		return
-	}
-
-	return
 }

@@ -61,7 +61,7 @@ func TestWriteResponse(t *testing.T) {
 		Segment:  3,
 		Tile:     4,
 		Data:     []byte{0x00, 0x01, 0x02},
-	}).Write(buf)
+	}).Write(bufio.NewWriter(buf))
 	expected := append([]byte(`Priority: 1
 Bitrate: 2
 Segment: 3

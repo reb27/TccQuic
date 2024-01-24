@@ -91,7 +91,7 @@ func ReadVideoPacketRequest(reader *bufio.Reader) (req *VideoPacketRequest, err 
 }
 
 // Write a VideoPacketResponse.
-func (r *VideoPacketResponse) Write(writer io.Writer) (err error) {
+func (r *VideoPacketResponse) Write(writer *bufio.Writer) (err error) {
 	// Format mimics HTTP:
 	// Headers - "Key: Value" separated by \n
 	// Followed by empty line
@@ -105,6 +105,11 @@ func (r *VideoPacketResponse) Write(writer io.Writer) (err error) {
 	}
 
 	_, err = writer.Write(r.Data)
+	if err != nil {
+		return err
+	}
+
+	err = writer.Flush()
 	return
 }
 

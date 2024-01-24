@@ -33,7 +33,6 @@ func main() {
 			parallelism, _ = strconv.Atoi(os.Args[3])
 		}
 
-		client := test_client.NewClient(url, port, parallelism)
-		client.Start()
+		test_client.StartTestClient(url, port, parallelism)
 	}
 }

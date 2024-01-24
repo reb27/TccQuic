@@ -3,6 +3,7 @@ package stream_handler
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"main/src/model"
 	"os"
@@ -29,31 +30,64 @@ func (s *StreamHandler) Stop() {
 	s.taskScheduler.Stop()
 }
 
-func (s *StreamHandler) HandleStream(stream quic.Stream) {
-	// receive file request
-	req, err := model.ReadVideoPacketRequest(bufio.NewReader(stream))
-	if err != nil {
-		log.Println(err)
-		stream.Close()
-		return
-	}
+func (s *StreamHandler) HandleStream(quicStream quic.Stream) {
+	go (&stream{
+		taskScheduler: s.taskScheduler,
+		quicStream:    quicStream,
+		reader:        bufio.NewReader(quicStream),
+		writer:        bufio.NewWriter(quicStream),
+		usageCount:    0,
+	}).listen()
+}
 
-	// enqueue request processing
-	ok := s.taskScheduler.Enqueue(req.Priority, func() {
-		s.handleRequest(stream, req)
-	})
-	if !ok {
-		log.Println("Task enqueue failed")
-		stream.Close()
+type stream struct {
+	taskScheduler TaskScheduler
+	quicStream    quic.Stream
+	reader        *bufio.Reader
+	writer        *bufio.Writer
+
+	// Increased for each pending request
+	usageCount int
+}
+
+func (s *stream) decreaseUsageCount() {
+	s.usageCount--
+	if s.usageCount == 0 {
+		s.quicStream.Close()
 	}
 }
 
-func (s *StreamHandler) handleRequest(stream quic.Stream, req *model.VideoPacketRequest) {
-	defer stream.Close()
+func (s *stream) listen() {
+	s.usageCount++
+	defer s.decreaseUsageCount()
+	// until the stream is closed
+	for {
+		// receive file request
+		req, err := model.ReadVideoPacketRequest(s.reader)
+		if req == nil {
+			if err != nil && err != io.EOF {
+				log.Println(err)
+			}
+			return
+		}
 
+		// enqueue request processing
+		s.usageCount++
+		ok := s.taskScheduler.Enqueue(req.Priority, func() {
+			defer s.decreaseUsageCount()
+			s.handleRequest(req)
+		})
+		if !ok {
+			log.Println("Task enqueue failed")
+			return
+		}
+	}
+}
+
+func (s *stream) handleRequest(req *model.VideoPacketRequest) {
 	log.Println("handleRequest segment =", req.Segment)
 	// read file
-	data := s.readFile(req)
+	data := readFile(req)
 
 	// send file response
 	res := model.VideoPacketResponse{
@@ -63,7 +97,7 @@ func (s *StreamHandler) handleRequest(stream quic.Stream, req *model.VideoPacket
 		Tile:     req.Tile,
 		Data:     data,
 	}
-	if err := res.Write(stream); err != nil {
+	if err := res.Write(s.writer); err != nil {
 		log.Println(err)
 	} else {
 		log.Println("Response sent")
@@ -71,13 +105,11 @@ func (s *StreamHandler) handleRequest(stream quic.Stream, req *model.VideoPacket
 }
 
 // Read file
-func (s *StreamHandler) readFile(req *model.VideoPacketRequest) []byte {
+func readFile(req *model.VideoPacketRequest) []byte {
 	basePath, err := os.Getwd()
 	if err != nil {
 		log.Println(err)
 	}
-	// TODO check the file name logic
-	//data, err := os.ReadFile(basePath + fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s", bitrate, segment, tile))
 	filePath := fmt.Sprintf("/data/segments/video_tiled_10_dash_track%d_%d.m4s",
 		req.Segment, req.Tile)
 	data, err := os.ReadFile(basePath + filePath)

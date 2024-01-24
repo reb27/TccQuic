@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -e
+
 PROGRAM_NAME=$0
 showUsage() {
     echo "Usage: $PROGRAM_NAME <IP>"
@@ -31,21 +33,21 @@ done
 # DELAY
 # LOAD
 launchTest() {
-    for PARALELLISM in 1 5 10 50 100; do
+    for PARALELLISM in 10 50 100; do
         for MODE in fifo sp wfq; do
-            LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
-                printf "%s/scenario%d-parallelism%d/%s/" \
-                $SUPER_LOG_DIR $SCENARIO $PARALELLISM $MODE)
-            mkdir -p "$LOG_DIR"
-            PARAMS=(-o $LOG_DIR --$MODE --sbw $BW --cbw $BW \
-                --loss $LOSS -p $PARALELLISM --delay $DELAY --load $LOAD)
-            echo "${PARAMS[@]}" > "$LOG_DIR/parameters"
-            ./server_scheduler_test.sh "${PARAMS[@]}" "$IP"
+            for LOSS in 2 10; do
+                LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
+                    printf "%s/scenario%d-parallelism%d-loss%d/%s/" \
+                    $SUPER_LOG_DIR $SCENARIO $PARALELLISM $LOSS $MODE)
+                mkdir -p "$LOG_DIR"
+                PARAMS=(-o $LOG_DIR --$MODE --sbw $BW --cbw $BW \
+                    --loss $LOSS -p $PARALELLISM --delay $DELAY --load $LOAD)
+                echo "${PARAMS[@]}" > "$LOG_DIR/parameters"
+                ./server_scheduler_test.sh "${PARAMS[@]}" "$IP"
+            done
         done
     done
 }
-
-LOSS=2
 
 SCENARIO=1
 LOAD=10
