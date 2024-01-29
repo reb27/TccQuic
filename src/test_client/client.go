@@ -38,8 +38,8 @@ type Client struct {
 	connection     quic.Connection
 	pipelineStream quic.Stream
 
-	waitingResponses        map[requestId]chan *model.VideoPacketResponse
-	waitingResponsesRWMutex sync.RWMutex
+	waitingResponses      map[requestId]chan *model.VideoPacketResponse
+	waitingResponsesMutex sync.Mutex
 }
 
 func NewClient(options ClientOptions) *Client {
@@ -109,9 +109,9 @@ func (c *Client) requestWithStream(stream quic.Stream,
 		tile:    r.Tile,
 	}
 	responseChannel := make(chan *model.VideoPacketResponse)
-	c.waitingResponsesRWMutex.Lock()
+	c.waitingResponsesMutex.Lock()
 	c.waitingResponses[id] = responseChannel
-	c.waitingResponsesRWMutex.Unlock()
+	c.waitingResponsesMutex.Unlock()
 
 	// Request
 
@@ -154,9 +154,12 @@ func (c *Client) openStream() (stream quic.Stream, err error) {
 				tile:    res.Tile,
 			}
 
-			c.waitingResponsesRWMutex.RLocker().Lock()
+			c.waitingResponsesMutex.Lock()
 			responseChannel, ok := c.waitingResponses[id]
-			c.waitingResponsesRWMutex.RLocker().Unlock()
+			if ok {
+				delete(c.waitingResponses, id)
+			}
+			c.waitingResponsesMutex.Unlock()
 
 			if ok {
 				responseChannel <- res

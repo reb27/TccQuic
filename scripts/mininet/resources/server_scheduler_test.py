@@ -14,7 +14,7 @@ SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
 LOSS = float(os.environ['LOSS'])
 PARALELLISM = int(os.environ['PARALELLISM'])
-DELAY = float(os.environ['DELAY'])
+DELAY = '%fms' % float(os.environ['DELAY'])
 LOAD = float(os.environ['LOAD'])
 
 print('SERVER_MODE=', SERVER_MODE)
