@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# Testsuite for the different scenarios
+
 set -e
 
 PROGRAM_NAME=$0
@@ -29,7 +31,6 @@ done
 # Environment variables:
 # SCENARIO
 # BW
-# LOSS
 # DELAY
 # LOAD
 launchTest() {
@@ -49,13 +50,13 @@ launchTest() {
 
 SCENARIO=1
 LOAD=10
-BW=100
+BW=500
 DELAY=24
 launchTest
 
 SCENARIO=2
 LOAD=30
-BW=100
+BW=500
 DELAY=24
 launchTest
 
@@ -73,13 +74,13 @@ launchTest
 
 SCENARIO=5
 LOAD=10
-BW=100
+BW=500
 DELAY=14
 launchTest
 
 SCENARIO=6
 LOAD=30
-BW=100
+BW=500
 DELAY=14
 launchTest
 

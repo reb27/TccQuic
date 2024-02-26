@@ -24,8 +24,6 @@ type ClientOptions struct {
 
 	// Port of the server
 	ServerPort int
-
-	Timeout time.Duration
 }
 
 type requestId struct {
@@ -84,9 +82,12 @@ func (c *Client) Connect() (err error) {
 }
 
 // Send a request
-func (c *Client) Request(r model.VideoPacketRequest) *model.VideoPacketResponse {
+func (c *Client) Request(
+	r model.VideoPacketRequest, timeout time.Duration) *model.VideoPacketResponse {
+
 	if c.pipelineStream != nil {
-		return c.requestWithStream(c.pipelineStream, r)
+		return c.requestWithStream(c.pipelineStream, r, timeout)
+
 	} else {
 		stream, err := c.openStream()
 		if err != nil {
@@ -95,13 +96,14 @@ func (c *Client) Request(r model.VideoPacketRequest) *model.VideoPacketResponse 
 		}
 		defer stream.Close()
 
-		return c.requestWithStream(stream, r)
+		return c.requestWithStream(stream, r, timeout)
 	}
 }
 
 // Send a request with a stream
 func (c *Client) requestWithStream(stream quic.Stream,
-	r model.VideoPacketRequest) *model.VideoPacketResponse {
+	r model.VideoPacketRequest,
+	timeout time.Duration) *model.VideoPacketResponse {
 	// Register request id
 
 	id := requestId{
@@ -126,7 +128,7 @@ func (c *Client) requestWithStream(stream quic.Stream,
 	select {
 	case res := <-responseChannel:
 		return res
-	case <-time.After(time.Duration(c.Options.Timeout)):
+	case <-time.After(time.Duration(timeout)):
 		return nil
 	}
 }

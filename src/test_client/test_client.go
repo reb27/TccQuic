@@ -7,7 +7,6 @@ import (
 	"log"
 	"main/src/model"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -16,19 +15,16 @@ import (
 const pipeline = false
 
 // Proportion of medium priority
-const mediumPriorityRatio = 1.0 / 3.0
+const mediumPriorityRatio = 0.0
 
 // Proportion of high priority
-const highPriorityRatio = 1.0 / 3.0
-
-const requestTimeout = 1 * time.Minute
+const highPriorityRatio = 1.0 / 2.0
 
 func StartTestClient(serverURL string, serverPort int, parallelism int) {
 	client := NewClient(ClientOptions{
 		Pipeline:   pipeline,
 		ServerURL:  serverURL,
 		ServerPort: serverPort,
-		Timeout:    requestTimeout,
 	})
 
 	err := client.Connect()
@@ -40,22 +36,34 @@ func StartTestClient(serverURL string, serverPort int, parallelism int) {
 	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
 
 	statisticsLogger := NewStatisticsLogger(statisticsPath)
-	runTestIteration(client, statisticsLogger, parallelism)
+	runTestIteration(client, parallelism, statisticsLogger)
 	statisticsLogger.Close()
 }
 
-func runTestIteration(client *Client, statisticsLogger *StatisticsLogger, parallelism int) {
+func runTestIteration(client *Client, parallelism int, statisticsLogger *StatisticsLogger) {
 	startTime := time.Now()
 
-	waitGroup := sync.WaitGroup{}
-
-	bufferSemaphore := NewSemaphore(parallelism)
+	segmentDuration := 1 * time.Second
+	baseLatency := 250 * time.Millisecond
+	firstSegment := 100
+	lastSegment := 177
+	playbackSimulator := NewPlaybackSimulator(
+		segmentDuration,
+		baseLatency,
+		firstSegment,
+		lastSegment,
+	)
 
 	counter := 0
 	counterMediumPriority := 0
 	counterHighPriority := 0
 
-	for iSegment := 100; iSegment <= 177; iSegment++ {
+	parallelismSemaphore := NewSemaphore(parallelism)
+
+	playbackSimulator.Start()
+
+	for iSegment := firstSegment; iSegment <= lastSegment; iSegment++ {
+		// Request tiles
 		for iTile := 1; iTile <= 120; iTile++ {
 			tile, segment := iTile, iSegment
 
@@ -69,42 +77,63 @@ func runTestIteration(client *Client, statisticsLogger *StatisticsLogger, parall
 			}
 			counter++
 
-			bufferSemaphore.Acquire()
-			waitGroup.Add(1)
+			request := model.VideoPacketRequest{
+				Priority: priority,
+				Bitrate:  model.HIGH_BITRATE,
+				Segment:  segment,
+				Tile:     tile,
+			}
+
+			// Segmento ja foi reproduzido! Nao fazer a requisicao
+			if playbackSimulator.CurrentBufferSegment() != segment {
+				log.Printf("Skipped (%d, %d)\n", segment, tile)
+
+				if statisticsLogger != nil {
+					statisticsLogger.Log(time.Since(startTime), request,
+						baseLatency+segmentDuration, true, true, false)
+				}
+
+				continue
+			}
+
+			parallelismSemaphore.Acquire()
 
 			go func() {
-				defer waitGroup.Done()
-				defer bufferSemaphore.Release()
+				defer parallelismSemaphore.Release()
 
 				log.Printf("Requesting (%d, %d)\n", segment, tile)
 
-				request := model.VideoPacketRequest{
-					Priority: priority,
-					Bitrate:  model.HIGH_BITRATE,
-					Segment:  segment,
-					Tile:     tile,
-				}
+				requestTime := time.Since(startTime)
+				response := client.Request(request, baseLatency+segmentDuration)
+				responseTime := time.Since(startTime)
 
-				requestTime := time.Now()
-				response := client.Request(request)
-				responseTime := time.Now()
-
+				var timedOut bool
 				if response == nil {
-					log.Panicf("did not receive response for (%d, %d)\n",
+					log.Printf("did not receive response for (%d, %d)\n",
 						segment, tile)
-				}
-				if len(response.Data) == 0 {
-					log.Panicln("empty response")
+					timedOut = true
+				} else {
+					if len(response.Data) == 0 {
+						log.Panicln("empty response")
+					}
+
+					if playbackSimulator.CurrentBufferSegment() != segment {
+						log.Printf("Response received for (%d, %d), but timed out\n", segment, tile)
+						timedOut = true
+					} else {
+						log.Printf("Response received for (%d, %d)\n", segment, tile)
+						timedOut = false
+					}
 				}
 
-				log.Printf("Response received for (%d, %d)\n", segment, tile)
 				if statisticsLogger != nil {
-					statisticsLogger.Log(requestTime.Sub(startTime), request,
-						responseTime.Sub(requestTime))
+					statisticsLogger.Log(requestTime, request,
+						responseTime-requestTime, timedOut, false, !timedOut)
 				}
 			}()
 		}
-	}
 
-	waitGroup.Wait()
+		// Wait for playback
+		playbackSimulator.WaitForPlaybackStart(iSegment)
+	}
 }

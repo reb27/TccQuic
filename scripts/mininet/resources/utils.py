@@ -31,7 +31,7 @@ class _TestTopo(Topo):
 '''
 Returns (mininet, server, clients)
 '''
-def createMininet(params: NetParams) -> (Mininet, Host, 'list[Host]'):
+def createMininet(params: NetParams) -> 'tuple[Mininet, Host, list[Host]]':
     mininet = Mininet(_TestTopo(params))
     server = mininet.hosts[0]
     clients = mininet.hosts[1:]
