@@ -16,11 +16,13 @@ func TestWriteRequest(t *testing.T) {
 		Bitrate:  2,
 		Segment:  3,
 		Tile:     4,
+		Timeout:  2000,
 	}).Write(buf)
 	expected := []byte(`Priority: 1
 Bitrate: 2
 Segment: 3
 Tile: 4
+Timeout: 2000
 
 `)
 
@@ -32,6 +34,7 @@ func TestReadRequest(t *testing.T) {
 Bitrate: 2
 Segment: 3
 Tile: 4
+Timeout: 2000
 
 `))
 	req, err := model.ReadVideoPacketRequest(bufio.NewReader(buf))
@@ -43,6 +46,7 @@ Tile: 4
 	assert.Equal(t, 2, int(req.Bitrate))
 	assert.Equal(t, 3, req.Segment)
 	assert.Equal(t, 4, req.Tile)
+	assert.Equal(t, 2000, req.Timeout)
 }
 
 func TestReadRequestFail(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"main/src/model"
 	"os"
+	"time"
 
 	"github.com/lucas-clemente/quic-go"
 )
@@ -72,10 +73,11 @@ func (s *stream) listen() {
 		}
 
 		// enqueue request processing
+		startTime := time.Now()
 		s.usageCount++
 		ok := s.taskScheduler.Enqueue(req.Priority, func() {
 			defer s.decreaseUsageCount()
-			s.handleRequest(req)
+			s.handleRequest(req, startTime)
 		})
 		if !ok {
 			log.Println("Task enqueue failed")
@@ -84,8 +86,14 @@ func (s *stream) listen() {
 	}
 }
 
-func (s *stream) handleRequest(req *model.VideoPacketRequest) {
+func (s *stream) handleRequest(req *model.VideoPacketRequest, startTime time.Time) {
 	log.Println("handleRequest segment =", req.Segment)
+
+	if time.Since(startTime) > time.Duration(req.Timeout)*time.Millisecond {
+		log.Println("Ignoring request (timed out)")
+		return
+	}
+
 	// read file
 	data := readFile(req)
 

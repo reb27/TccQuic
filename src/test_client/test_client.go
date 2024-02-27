@@ -77,34 +77,37 @@ func runTestIteration(client *Client, parallelism int, statisticsLogger *Statist
 			}
 			counter++
 
-			request := model.VideoPacketRequest{
-				Priority: priority,
-				Bitrate:  model.HIGH_BITRATE,
-				Segment:  segment,
-				Tile:     tile,
-			}
-
-			// Segmento ja foi reproduzido! Nao fazer a requisicao
-			if playbackSimulator.CurrentBufferSegment() != segment {
-				log.Printf("Skipped (%d, %d)\n", segment, tile)
-
-				if statisticsLogger != nil {
-					statisticsLogger.Log(time.Since(startTime), request,
-						baseLatency+segmentDuration, true, true, false)
-				}
-
-				continue
-			}
-
 			parallelismSemaphore.Acquire()
 
 			go func() {
 				defer parallelismSemaphore.Release()
 
+				// How much time left to receive?
+				timeToReceive := playbackSimulator.GetTimeToReceive(segment)
+
+				request := model.VideoPacketRequest{
+					Priority: priority,
+					Bitrate:  model.HIGH_BITRATE,
+					Segment:  segment,
+					Tile:     tile,
+					Timeout:  int(timeToReceive.Milliseconds()),
+				}
+
+				if timeToReceive == 0 {
+					log.Printf("Skipped (%d, %d)\n", segment, tile)
+
+					if statisticsLogger != nil {
+						statisticsLogger.Log(time.Since(startTime), request,
+							baseLatency+segmentDuration, true, true, false)
+					}
+
+					return
+				}
+
 				log.Printf("Requesting (%d, %d)\n", segment, tile)
 
 				requestTime := time.Since(startTime)
-				response := client.Request(request, baseLatency+segmentDuration)
+				response := client.Request(request, timeToReceive)
 				responseTime := time.Since(startTime)
 
 				var timedOut bool
@@ -117,7 +120,7 @@ func runTestIteration(client *Client, parallelism int, statisticsLogger *Statist
 						log.Panicln("empty response")
 					}
 
-					if playbackSimulator.CurrentBufferSegment() != segment {
+					if playbackSimulator.GetTimeToReceive(segment) == 0 {
 						log.Printf("Response received for (%d, %d), but timed out\n", segment, tile)
 						timedOut = true
 					} else {

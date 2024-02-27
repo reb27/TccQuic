@@ -14,6 +14,8 @@ type VideoPacketRequest struct {
 	Bitrate  Bitrate
 	Segment  int
 	Tile     int
+	// [milliseconds] If this timeout elapses, do not send a response.
+	Timeout int
 }
 
 type VideoPacketResponse struct {
@@ -31,8 +33,8 @@ func (r *VideoPacketRequest) Write(writer io.Writer) (err error) {
 	// Followed by empty line
 	// Followed by optional data
 	_, err = fmt.Fprintf(writer,
-		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\n\n",
-		r.Priority, r.Bitrate, r.Segment, r.Tile)
+		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\nTimeout: %d\n\n",
+		r.Priority, r.Bitrate, r.Segment, r.Tile, r.Timeout)
 	return
 }
 
@@ -86,6 +88,12 @@ func ReadVideoPacketRequest(reader *bufio.Reader) (req *VideoPacketRequest, err 
 				return
 			}
 			request.Tile = intValue
+		case "Timeout":
+			var intValue int
+			if intValue, err = strconv.Atoi(value); err != nil {
+				return
+			}
+			request.Timeout = intValue
 		}
 	}
 }
