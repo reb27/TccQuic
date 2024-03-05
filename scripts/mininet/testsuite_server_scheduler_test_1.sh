@@ -50,13 +50,13 @@ launchTest() {
 
 SCENARIO=1
 LOAD=10
-BW=500
+BW=100
 DELAY=24
 launchTest
 
 SCENARIO=2
 LOAD=30
-BW=500
+BW=100
 DELAY=24
 launchTest
 
@@ -74,13 +74,13 @@ launchTest
 
 SCENARIO=5
 LOAD=10
-BW=500
+BW=100
 DELAY=14
 launchTest
 
 SCENARIO=6
 LOAD=30
-BW=500
+BW=100
 DELAY=14
 launchTest
 

@@ -7,10 +7,10 @@ import (
 )
 
 type PlaybackSimulator struct {
-	currentPlaybackSegment  int
-	timePlaybackNextSegment time.Time
-	mutex                   *sync.Mutex
-	cond                    *sync.Cond
+	currentPlaybackSegment int
+	segmentPlaybackTime    []time.Time
+	mutex                  *sync.Mutex
+	cond                   *sync.Cond
 
 	segmentDuration time.Duration
 	baseLatency     time.Duration
@@ -28,6 +28,7 @@ func NewPlaybackSimulator(
 	cond := sync.NewCond(mutex)
 	return &PlaybackSimulator{
 		currentPlaybackSegment: firstSegment - 1,
+		segmentPlaybackTime:    make([]time.Time, lastSegment+1),
 		mutex:                  mutex,
 		cond:                   cond,
 
@@ -40,24 +41,23 @@ func NewPlaybackSimulator(
 
 func (p *PlaybackSimulator) Start() {
 	p.mutex.Lock()
-	timePlaybackNextSegment := time.Now().Add(p.baseLatency)
-	p.timePlaybackNextSegment = timePlaybackNextSegment
+	t := time.Now().Add(p.baseLatency)
+	for i := p.firstSegment; i <= p.lastSegment; i++ {
+		p.segmentPlaybackTime[i] = t
+		t = t.Add(p.segmentDuration)
+	}
 	p.mutex.Unlock()
 
 	go func() {
-		time.Sleep(time.Until(timePlaybackNextSegment))
-
 		for playbackSegment := p.firstSegment; playbackSegment <= p.lastSegment; playbackSegment++ {
+			time.Sleep(time.Until(p.segmentPlaybackTime[playbackSegment]))
+
 			log.Printf("Playback %d", playbackSegment)
 
 			p.mutex.Lock()
-			timePlaybackNextSegment := time.Now().Add(p.segmentDuration)
-			p.timePlaybackNextSegment = timePlaybackNextSegment
 			p.currentPlaybackSegment = playbackSegment
 			p.mutex.Unlock()
 			p.cond.Broadcast()
-
-			time.Sleep(time.Until(timePlaybackNextSegment))
 		}
 	}()
 }
@@ -79,7 +79,7 @@ func (p *PlaybackSimulator) GetTimeToReceive(segment int) time.Duration {
 
 	p.mutex.Lock()
 	if segment == p.currentPlaybackSegment+1 {
-		result = time.Until(p.timePlaybackNextSegment)
+		result = time.Until(p.segmentPlaybackTime[segment])
 	}
 	p.mutex.Unlock()
 
