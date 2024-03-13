@@ -7,6 +7,7 @@ showUsage() {
     echo "--fifo, --sp, --wfq     Select server mode (default: fifo)"
     echo "--sbw N                 Select server bandwidth in Mbps"
     echo "--cbw N                 Select client bandwidth in Mbps"
+    echo "--baselatency N         Select client base latency"
     echo "--loss N                Select loss in %"
     echo "-p N                    Select paralellism"
     echo "--delay N               Select delay"
@@ -21,23 +22,25 @@ LOSS="2"
 PARALELLISM="128"
 DELAY="0"
 LOAD="0"
+BASE_LATENCY="250"
 IP=
 LOG_DIR=
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
-    --fifo) SERVER_MODE="fifo" ; shift   ;;
-    --sp)   SERVER_MODE="sp"   ; shift   ;;
-    --wfq)  SERVER_MODE="wfq"  ; shift   ;;
-    --sbw)  SERVER_BW="$2"     ; shift 2 ;;
-    --cbw)  CLIENT_BW="$2"     ; shift 2 ;;
-    --loss) LOSS="$2"          ; shift 2 ;;
-    -p)     PARALELLISM="$2"   ; shift 2 ;;
-    --delay) DELAY="$2"        ; shift 2 ;;
-    --load) LOAD="$2"          ; shift 2 ;;
-    -o)     LOG_DIR="$2"       ; shift 2 ;;
-    -*)     showUsage ; exit 1 ; shift   ;;
-    *)      IP="$1"            ; shift   ;;
+    --fifo) SERVER_MODE="fifo"              ; shift   ;;
+    --sp)   SERVER_MODE="sp"                ; shift   ;;
+    --wfq)  SERVER_MODE="wfq"               ; shift   ;;
+    --sbw)  SERVER_BW="$2"                  ; shift 2 ;;
+    --cbw)  CLIENT_BW="$2"                  ; shift 2 ;;
+    --baselatency)  BASE_LATENCY="$2"       ; shift 2 ;;
+    --loss) LOSS="$2"                       ; shift 2 ;;
+    -p)     PARALELLISM="$2"                ; shift 2 ;;
+    --delay) DELAY="$2"                     ; shift 2 ;;
+    --load) LOAD="$2"                       ; shift 2 ;;
+    -o)     LOG_DIR="$2"                    ; shift 2 ;;
+    -*)     showUsage ; exit 1              ; shift   ;;
+    *)      IP="$1"                         ; shift   ;;
     esac
 done
 
@@ -135,7 +138,7 @@ mkdir -p "$LOG_DIR"
 withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
-            DELAY='$DELAY' LOAD='$LOAD' \
+            DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 EXIT_CODE=$?
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"

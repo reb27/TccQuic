@@ -23,7 +23,7 @@ func main() {
 		server := server.NewServer("0.0.0.0", port, queuePolicy)
 		server.Start()
 	} else if arg == "test-client" {
-		// Uso: main test-client [ip] parallelism
+		// Uso: main test-client [ip] parallelism baseLatency
 
 		if len(os.Args) > 1 {
 			url = os.Args[2]
@@ -32,7 +32,11 @@ func main() {
 		if len(os.Args) > 2 {
 			parallelism, _ = strconv.Atoi(os.Args[3])
 		}
+		baseLatency := 250
+		if len(os.Args) > 3 {
+			baseLatency, _ = strconv.Atoi(os.Args[4])
+		}
 
-		test_client.StartTestClient(url, port, parallelism)
+		test_client.StartTestClient(url, port, parallelism, baseLatency)
 	}
 }

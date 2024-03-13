@@ -16,6 +16,7 @@ LOSS = float(os.environ['LOSS'])
 PARALELLISM = int(os.environ['PARALELLISM'])
 DELAY = '%fms' % float(os.environ['DELAY'])
 LOAD = float(os.environ['LOAD'])
+BASE_LATENCY = int(os.environ['BASE_LATENCY'])
 
 print('SERVER_MODE=', SERVER_MODE)
 print('SERVER_BW=', SERVER_BW)
@@ -24,6 +25,7 @@ print('LOSS=', LOSS)
 print('PARALELLISM=', PARALELLISM)
 print('DELAY=', DELAY)
 print('LOAD=', LOAD)
+print('BASE_LATENCY=', BASE_LATENCY)
 
 class Test():
     def __init__(self):
@@ -70,7 +72,8 @@ class Test():
             stderr=subprocess.STDOUT)
         # Start client
         self.processes[self.client] = self.client.popen(
-            [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM)],
+            [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM),
+             str(BASE_LATENCY)],
             cwd=dir,
             stderr=subprocess.STDOUT)
         

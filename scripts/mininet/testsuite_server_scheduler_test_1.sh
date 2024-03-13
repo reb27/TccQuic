@@ -36,15 +36,18 @@ done
 launchTest() {
     PARALELLISM=120
     LOSS=2
-    for MODE in fifo sp wfq; do
-        LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
-            printf "%s/scenario%d-parallelism%d-loss%d/%s/" \
-            $SUPER_LOG_DIR $SCENARIO $PARALELLISM $LOSS $MODE)
-        mkdir -p "$LOG_DIR"
-        PARAMS=(-o $LOG_DIR --$MODE --sbw $BW --cbw $BW \
-            --loss $LOSS -p $PARALELLISM --delay $DELAY --load $LOAD)
-        echo "${PARAMS[@]}" > "$LOG_DIR/parameters"
-        ./server_scheduler_test.sh "${PARAMS[@]}" "$IP"
+    for BASE_LATENCY in 10 50 100 200 300 400 500 1000; do
+        for MODE in fifo sp wfq; do
+            LOG_DIR=$(LC_NUMERIC="en_US.UTF-8" \
+                printf "%s/scenario%d-baselatency%d/%s/" \
+                $SUPER_LOG_DIR $SCENARIO $BASE_LATENCY $MODE)
+            mkdir -p "$LOG_DIR"
+            PARAMS=(-o $LOG_DIR --$MODE --sbw $BW --cbw $BW \
+                --loss $LOSS -p $PARALELLISM --delay $DELAY --load $LOAD \
+                --baselatency $BASE_LATENCY)
+            echo "${PARAMS[@]}" > "$LOG_DIR/parameters"
+            ./server_scheduler_test.sh "${PARAMS[@]}" "$IP"
+        done
     done
 }
 

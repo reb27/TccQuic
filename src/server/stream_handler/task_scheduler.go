@@ -115,6 +115,7 @@ type priorityTaskScheduler struct {
 }
 
 type priorityGroup struct {
+	// nil if the priority has no tasks scheduled.
 	entry    scheduler.SchedulerEntry[int]
 	tasks    datastructures.CircularQueue[func()]
 	priority float32
@@ -123,9 +124,9 @@ type priorityGroup struct {
 func getPriority(priorityGroup model.Priority) float32 {
 	switch priorityGroup {
 	case model.HIGH_PRIORITY:
-		return 110.0
+		return 120.0
 	case model.MEDIUM_PRIORITY:
-		return 101.0
+		return 110.0
 	case model.LOW_PRIORITY:
 		return 100.0
 	default:
@@ -147,7 +148,7 @@ func newPriorityTaskScheduler(policy QueuePolicy) *priorityTaskScheduler {
 	groups := make([]*priorityGroup, model.PRIORITY_LEVEL_COUNT)
 	for i := 0; i < model.PRIORITY_LEVEL_COUNT; i++ {
 		groups[i] = &priorityGroup{
-			entry:    sc.CreateEntry(i),
+			entry:    nil,
 			tasks:    datastructures.NewCircularQueue[func()](maxTasksPerPriorityLevel),
 			priority: getPriority(model.Priority(i)),
 		}
@@ -192,6 +193,9 @@ func (ps *priorityTaskScheduler) Enqueue(priority model.Priority, task func()) b
 	wasEmpty := group.tasks.IsEmpty()
 	ok := group.tasks.Enqueue(task)
 	if ok && wasEmpty {
+		if group.entry == nil {
+			group.entry = ps.scheduler.CreateEntry(priorityGroupId)
+		}
 		group.entry.SetPriority(group.priority)
 		ok = group.entry.Enqueue()
 	}
@@ -218,6 +222,8 @@ func (ps *priorityTaskScheduler) Run() {
 		if task, ok := group.tasks.Dequeue(); ok {
 			if !group.tasks.IsEmpty() {
 				entry.Enqueue()
+			} else {
+				group.entry = nil
 			}
 
 			// Execute task outside mutex

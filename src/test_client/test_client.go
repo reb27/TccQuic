@@ -20,7 +20,8 @@ const mediumPriorityRatio = 0.0
 // Proportion of high priority
 const highPriorityRatio = 1.0 / 2.0
 
-func StartTestClient(serverURL string, serverPort int, parallelism int) {
+func StartTestClient(serverURL string, serverPort int, parallelism int,
+	baseLatencyMs int) {
 	client := NewClient(ClientOptions{
 		Pipeline:   pipeline,
 		ServerURL:  serverURL,
@@ -36,15 +37,16 @@ func StartTestClient(serverURL string, serverPort int, parallelism int) {
 	statisticsPath := fmt.Sprintf("statistics-%d.csv", os.Getpid())
 
 	statisticsLogger := NewStatisticsLogger(statisticsPath)
-	runTestIteration(client, parallelism, statisticsLogger)
+	runTestIteration(client, parallelism, baseLatencyMs, statisticsLogger)
 	statisticsLogger.Close()
 }
 
-func runTestIteration(client *Client, parallelism int, statisticsLogger *StatisticsLogger) {
+func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
+	statisticsLogger *StatisticsLogger) {
 	startTime := time.Now()
 
 	segmentDuration := 1 * time.Second
-	baseLatency := 250 * time.Millisecond
+	baseLatency := time.Duration(baseLatencyMs) * time.Millisecond
 	firstSegment := 100
 	lastSegment := 177
 	playbackSimulator := NewPlaybackSimulator(
