@@ -7,6 +7,7 @@ import (
 	"log"
 	"main/src/model"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,8 @@ func StartTestClient(serverURL string, serverPort int, parallelism int,
 		ServerPort: serverPort,
 	})
 
+	log.Println("Base latency =", baseLatencyMs)
+
 	err := client.Connect()
 	if err != nil {
 		log.Println("failed to connect")
@@ -43,6 +46,8 @@ func StartTestClient(serverURL string, serverPort int, parallelism int,
 
 func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 	statisticsLogger *StatisticsLogger) {
+	var wg sync.WaitGroup
+
 	startTime := time.Now()
 
 	segmentDuration := 1 * time.Second
@@ -81,7 +86,9 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 
 			parallelismSemaphore.Acquire()
 
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				defer parallelismSemaphore.Release()
 
 				// How much time left to receive?
@@ -141,4 +148,6 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 		// Wait for playback
 		playbackSimulator.WaitForPlaybackStart(iSegment)
 	}
+
+	wg.Wait()
 }
