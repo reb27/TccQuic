@@ -121,10 +121,14 @@ type priorityGroup struct {
 	priority float32
 }
 
-func getPriority(priorityGroup model.Priority) float32 {
+func getPriority(policy QueuePolicy, priorityGroup model.Priority) float32 {
 	switch priorityGroup {
 	case model.HIGH_PRIORITY:
-		return 120.0
+		if policy == WeightedFairQueue {
+			return 49.0
+		} else {
+			return 120.0
+		}
 	case model.MEDIUM_PRIORITY:
 		return 110.0
 	case model.LOW_PRIORITY:
@@ -150,7 +154,7 @@ func newPriorityTaskScheduler(policy QueuePolicy) *priorityTaskScheduler {
 		groups[i] = &priorityGroup{
 			entry:    nil,
 			tasks:    datastructures.NewCircularQueue[func()](maxTasksPerPriorityLevel),
-			priority: getPriority(model.Priority(i)),
+			priority: getPriority(policy, model.Priority(i)),
 		}
 	}
 

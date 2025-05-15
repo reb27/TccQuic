@@ -1,0 +1,75 @@
+@startuml
+
+actor Net
+
+participant MainThread
+
+participant StreamAcceptor
+
+participant StreamListener
+
+participant StreamHandler
+
+Net -> MainThread : Receiving connection
+
+activate MainThread
+
+create StreamAcceptor
+MainThread -> StreamAcceptor : Creates thread
+deactivate MainThread
+
+Net -> StreamAcceptor : Receiving stream
+
+activate StreamAcceptor
+
+create StreamListener
+StreamAcceptor -> StreamListener : Creates thread
+
+create StreamHandler
+StreamAcceptor -> StreamHandler : Creates thread
+
+deactivate StreamAcceptor
+
+Net -> StreamListener : Receiving request 1
+
+activate StreamListener
+
+activate StreamHandler
+
+StreamListener -> StreamHandler : Enqueue request 1
+
+deactivate StreamListener
+
+Net -> StreamListener : Receiving request 2
+
+activate StreamListener
+
+StreamListener -> StreamHandler : Enqueue request 2
+
+deactivate StreamListener
+
+StreamHandler -> StreamHandler  : Handle request 2
+
+StreamHandler -> Net            : Send response 2
+
+StreamHandler -> StreamHandler  : Handle request 1
+
+StreamHandler -> Net            : Send response 1
+deactivate StreamHandler
+
+Net -> StreamListener           : Closing stream
+
+activate StreamListener
+
+StreamListener -> StreamHandler
+destroy StreamHandler
+StreamListener -> StreamListener
+destroy StreamListener
+
+Net -> StreamAcceptor           : Closing connection
+activate StreamAcceptor
+StreamAcceptor -> StreamAcceptor
+
+destroy StreamAcceptor
+
+@enduml

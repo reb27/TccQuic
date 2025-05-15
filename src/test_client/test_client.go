@@ -19,7 +19,7 @@ const pipeline = false
 const mediumPriorityRatio = 0.0
 
 // Proportion of high priority
-const highPriorityRatio = 1.0 / 2.0
+const highPriorityRatio = 0.3
 
 func StartTestClient(serverURL string, serverPort int, parallelism int,
 	baseLatencyMs int) {
