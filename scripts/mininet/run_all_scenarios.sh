@@ -46,6 +46,7 @@ launchTest() {
                 --loss $LOSS -p $PARALELLISM --delay $DELAY --load $LOAD \
                 --baselatency $BASE_LATENCY)
             echo "${PARAMS[@]}" > "$LOG_DIR/parameters"
+            echo "[INFO] Running test with BASE_LATENCY=$BASE_LATENCY MODE=$MODE"
             ./server_scheduler_test.sh "${PARAMS[@]}" "$IP"
         done
     done

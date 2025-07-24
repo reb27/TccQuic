@@ -3,12 +3,16 @@
 package test_client
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"main/src/model"
+	"main/src/test_client/netstats"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // If pipeline = true, use the same stream for all requests.
@@ -21,8 +25,7 @@ const mediumPriorityRatio = 0.0
 // Proportion of high priority
 const highPriorityRatio = 0.3
 
-func StartTestClient(serverURL string, serverPort int, parallelism int,
-	baseLatencyMs int) {
+func StartTestClient(serverURL string, serverPort int, parallelism int, baseLatencyMs int) {
 	client := NewClient(ClientOptions{
 		Pipeline:   pipeline,
 		ServerURL:  serverURL,
@@ -67,34 +70,43 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 
 	parallelismSemaphore := NewSemaphore(parallelism)
 
+	log.Printf("Test started with parallelism = %d", parallelism)
+	fmt.Printf("Test started with parallelism = %d\n", parallelism)
+
 	playbackSimulator.Start()
 
+	// Inicia o pacote de coleta de dados da rede com uma window size
+	collector := netstats.New(177)
+
 	for iSegment := firstSegment; iSegment <= lastSegment; iSegment++ {
-		// Request tiles
+		log.Printf("Processing segment %d", iSegment)
+
 		for iTile := 1; iTile <= 120; iTile++ {
 			tile, segment := iTile, iSegment
 
 			priority := model.LOW_PRIORITY
-			if float64(counterHighPriority)/float64(counter) < highPriorityRatio {
+			if float64(counterHighPriority)/float64(counter+1) < highPriorityRatio {
 				priority = model.HIGH_PRIORITY
 				counterHighPriority++
-			} else if float64(counterMediumPriority)/float64(counter) < mediumPriorityRatio {
+			} else if float64(counterMediumPriority)/float64(counter+1) < mediumPriorityRatio {
 				priority = model.MEDIUM_PRIORITY
 				counterMediumPriority++
 			}
 			counter++
 
 			parallelismSemaphore.Acquire()
-
 			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer parallelismSemaphore.Release()
 
-				// How much time left to receive?
+			go func() {
+				defer func() {
+					parallelismSemaphore.Release()
+					wg.Done()
+				}()
+
 				timeToReceive := playbackSimulator.GetTimeToReceive(segment)
 
 				request := model.VideoPacketRequest{
+					ID:       uuid.Must(uuid.New(), nil),
 					Priority: priority,
 					Bitrate:  model.HIGH_BITRATE,
 					Segment:  segment,
@@ -102,52 +114,67 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 					Timeout:  int(timeToReceive.Milliseconds()),
 				}
 
-				if timeToReceive == 0 {
-					log.Printf("Skipped (%d, %d)\n", segment, tile)
+				// Log de envio da requisição
+				fmt.Printf("Sending request for segment %d, tile %d with priority %d\n", segment, tile, priority)
 
-					if statisticsLogger != nil {
-						statisticsLogger.Log(time.Since(startTime), request,
-							baseLatency+segmentDuration, true, true, false)
-					}
-
+				// Obtém o tamanho da request em bytes
+				requestBytes, err := json.Marshal(request)
+				if err != nil {
 					return
 				}
 
-				log.Printf("Requesting (%d, %d)\n", segment, tile)
+				sizeInBytes := len(requestBytes)
+
+				// Registra a request, o tamanho e realiza o cálculo da vazão instantenea
+				_, tp := collector.RecordRecv(request.ID, sizeInBytes)
+
+				if timeToReceive == 0 {
+					fmt.Printf("Skipped (timeout) segment %d, tile %d\n", segment, tile)
+					if statisticsLogger != nil {
+						statisticsLogger.Log(time.Since(startTime), request,
+							baseLatency+segmentDuration, true, true, false, tp)
+					}
+					return
+				}
 
 				requestTime := time.Since(startTime)
 				response := client.Request(request, timeToReceive)
 				responseTime := time.Since(startTime)
 
+				// Remove a request do mapa de pendentes
+				collector.RecordSend(request.ID)
+
 				var timedOut bool
 				if response == nil {
-					log.Printf("did not receive response for (%d, %d)\n",
-						segment, tile)
+					fmt.Printf("Timeout: no response for segment %d, tile %d\n", segment, tile)
 					timedOut = true
 				} else {
 					if len(response.Data) == 0 {
-						log.Panicln("empty response")
+						log.Panicf("Empty response for (%d, %d)", segment, tile)
 					}
 
 					if playbackSimulator.GetTimeToReceive(segment) == 0 {
-						log.Printf("Response received for (%d, %d), but timed out\n", segment, tile)
+						fmt.Printf("Late response for segment %d, tile %d\n", segment, tile)
 						timedOut = true
 					} else {
-						log.Printf("Response received for (%d, %d)\n", segment, tile)
+						fmt.Printf("Received response for segment %d, tile %d\n", segment, tile)
 						timedOut = false
 					}
 				}
 
 				if statisticsLogger != nil {
 					statisticsLogger.Log(requestTime, request,
-						responseTime-requestTime, timedOut, false, !timedOut)
+						responseTime-requestTime, timedOut, false, !timedOut, tp)
 				}
 			}()
 		}
 
-		// Wait for playback
 		playbackSimulator.WaitForPlaybackStart(iSegment)
 	}
 
+	log.Println("Waiting for all goroutines to finish...")
+	fmt.Println("Waiting for all goroutines to finish...")
 	wg.Wait()
+	log.Println("All goroutines completed.")
+	fmt.Println("Test iteration complete.")
 }

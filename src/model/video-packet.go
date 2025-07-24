@@ -7,9 +7,12 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type VideoPacketRequest struct {
+	ID       uuid.UUID
 	Priority Priority
 	Bitrate  Bitrate
 	Segment  int

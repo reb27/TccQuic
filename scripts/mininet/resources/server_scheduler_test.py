@@ -4,10 +4,15 @@
 
 from mininet.net import Mininet, Host
 from mininet.log import setLogLevel
-from mininet.util import pmonitor
-import os, signal, subprocess
+import os
+import subprocess
 from subprocess import Popen
 from utils import HostParams, NetParams, createMininet
+from mininet.util import pmonitor
+import select
+
+print("[INFO] Running processes on server and client...")
+
 
 SERVER_MODE = os.environ['SERVER_MODE']
 SERVER_BW = float(os.environ['SERVER_BW'])
@@ -49,6 +54,10 @@ class Test():
     def __run(self):
         print('Starting Mininet')
         self.net.start()
+        print("Hosts in the network:", [host.name for host in self.net.hosts])
+        print("Server IP:", self.server.IP())
+        print("Client IP:", self.client.IP())
+        
         if not self.net.waitConnected():
             raise RuntimeError('Failed to connect switches')
         setLogLevel('info')
@@ -69,33 +78,36 @@ class Test():
         self.processes[self.server] = self.server.popen(
             [dir + '/main', 'server', self.server_policy],
             cwd=dir,
-            stderr=subprocess.STDOUT)
+            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE)
         # Start client
         self.processes[self.client] = self.client.popen(
             [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM),
              str(BASE_LATENCY)],
             cwd=dir,
-            stderr=subprocess.STDOUT)
+            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE)
         
-        for host, line in pmonitor(self.processes):
-            if line:
-                if line.endswith('\n'):
-                    line = line[:-1]
-                print('[%s] %s' % (host, line))
-            if len(self.processes) != 2:
-                break
+        alive = dict(self.processes)
+
+        for host, line in pmonitor(alive, timeoutms=1000):
+            if host and line:
+                print(f"[{host.name}] {line.strip()}")
 
     def __finalize(self):
         setLogLevel('warning')
         for process in self.processes.values():
             process.terminate()
-        if self.iperf_client != None:
+        if self.iperf_client is not None:
             self.iperf_client.terminate()
-        if self.iperf_server != None:
+        if self.iperf_server is not None:
             self.iperf_server.terminate()
             print('iperf server results:')
             result, _ = self.iperf_server.communicate()
-            print(str(result, 'utf8'))
+            try:
+                print(result.decode('utf-8', errors='ignore'))
+            except Exception as e:
+                print(f"[decode error: {e}]")
         self.net.stop()
 
 Test().run()

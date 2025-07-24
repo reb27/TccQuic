@@ -18,7 +18,7 @@ type StatisticsLogger struct {
 }
 
 func NewStatisticsLogger(path string) *StatisticsLogger {
-	const header string = "time_ns,segment,tile,priority,latency_ns,timedout,skipped,ok\n"
+	const header string = "time_ns,segment,tile,priority,latency_ns,timedout,skipped,ok,tp\n"
 
 	file, err := os.Create(path)
 	if err != nil {
@@ -39,11 +39,11 @@ func NewStatisticsLogger(path string) *StatisticsLogger {
 
 func (s *StatisticsLogger) Log(timeFromStart time.Duration,
 	r model.VideoPacketRequest, latency time.Duration, timedOut bool,
-	skipped bool, ok bool) {
+	skipped bool, ok bool, tp float64) {
 	s.mutex.Lock()
 
-	row := fmt.Sprintf("%d,%d,%d,%d,%d,%t,%t,%t\n", timeFromStart.Nanoseconds(),
-		r.Segment, r.Tile, r.Priority, latency.Nanoseconds(), timedOut, skipped, ok)
+	row := fmt.Sprintf("%d,%d,%d,%d,%d,%t,%t,%t,%f\n", timeFromStart.Nanoseconds(),
+		r.Segment, r.Tile, r.Priority, latency.Nanoseconds(), timedOut, skipped, ok, tp)
 
 	if _, err := s.fileWriter.WriteString(row); err != nil {
 		log.Panicf("Failed to write: %s\n", err)
