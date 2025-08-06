@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"main/src/model"
+	"main/src/netstats"
 	"sync"
 	"time"
 
@@ -31,19 +32,29 @@ type requestId struct {
 	tile    int
 }
 
+type pendingResponse struct {
+	numericID       int
+	responseChannel chan *model.VideoPacketResponse
+}
+
 type Client struct {
 	Options        ClientOptions
 	connection     quic.Connection
 	pipelineStream quic.Stream
 
-	waitingResponses      map[requestId]chan *model.VideoPacketResponse
+	statsCollector *netstats.StatsCollector
+	nextRequestID  int
+
+	waitingResponses      map[requestId]pendingResponse
 	waitingResponsesMutex sync.Mutex
 }
 
 func NewClient(options ClientOptions) *Client {
 	return &Client{
 		Options:          options,
-		waitingResponses: make(map[requestId]chan *model.VideoPacketResponse),
+		statsCollector:   netstats.New(20), // Usando uma janela de 20 medições
+		nextRequestID:    0,
+		waitingResponses: make(map[requestId]pendingResponse),
 	}
 }
 
@@ -105,26 +116,34 @@ func (c *Client) requestWithStream(stream quic.Stream,
 	r model.VideoPacketRequest,
 	timeout time.Duration) *model.VideoPacketResponse {
 	// Register request id
+	c.waitingResponsesMutex.Lock()
+	numericID := c.nextRequestID
+	c.nextRequestID++
 
 	id := requestId{
 		segment: r.Segment,
 		tile:    r.Tile,
 	}
 	responseChannel := make(chan *model.VideoPacketResponse)
-	c.waitingResponsesMutex.Lock()
-	c.waitingResponses[id] = responseChannel
-	c.waitingResponsesMutex.Unlock()
+	c.waitingResponses[id] = pendingResponse{
+		numericID:       numericID,
+		responseChannel: responseChannel,
+	}
+c.waitingResponsesMutex.Unlock()
+
+	// Record send time
+	c.statsCollector.RecordSend(numericID)
 
 	// Request
-
 	if err := r.Write(stream); err != nil {
+		c.waitingResponsesMutex.Lock()
 		delete(c.waitingResponses, id)
+		c.waitingResponsesMutex.Unlock()
 		log.Println("Write failed: ", err)
 		return nil
 	}
 
 	// Response
-
 	select {
 	case res := <-responseChannel:
 		return res
@@ -157,14 +176,17 @@ func (c *Client) openStream() (stream quic.Stream, err error) {
 			}
 
 			c.waitingResponsesMutex.Lock()
-			responseChannel, ok := c.waitingResponses[id]
+			pending, ok := c.waitingResponses[id]
 			if ok {
 				delete(c.waitingResponses, id)
 			}
 			c.waitingResponsesMutex.Unlock()
 
 			if ok {
-				responseChannel <- res
+				_, tp := c.statsCollector.RecordRecv(pending.numericID, len(res.Data))
+				avgTp := c.statsCollector.AvgThroughput()
+				log.Printf("Throughput: %.2f MB/s, Avg Throughput: %.2f MB/s", tp/1024/1024, avgTp/1024/1024)
+				pending.responseChannel <- res
 			}
 		}
 	}()
