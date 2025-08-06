@@ -19,10 +19,10 @@ SERVER_MODE="fifo"
 SERVER_BW="100"
 CLIENT_BW="100"
 LOSS="2"
-PARALELLISM="128"
+PARALELLISM="10"
 DELAY="0"
 LOAD="0"
-BASE_LATENCY="250"
+BASE_LATENCY="100"
 IP=
 LOG_DIR=
 
@@ -91,7 +91,7 @@ withSSH() {
 
 # upload SOURCE DESTINATION
 upload() {
-    rsync -a "$1" "mininet@$IP:$2"
+    scp -r "$1" "mininet@$IP:$2"
     EXIT_CODE=$?
     if [[ $EXIT_CODE != 0 ]]; then
         echo
@@ -103,7 +103,7 @@ upload() {
 
 # download SOURCE DESTINATION
 download() {
-    rsync -a "mininet@$IP:$1" "$2"
+    scp -r "mininet@$IP:$1" "$2"
     EXIT_CODE=$?
     if [[ $EXIT_CODE != 0 ]]; then
         echo
@@ -117,7 +117,7 @@ REMOTE_DIR=/tmp/server_scheduler_test
 
 echo -e "${PURPLE}Compiling...${NC}"
 
-(cd ../.. && go build)
+(cd ../.. && GOOS=linux GOARCH=amd64 go build)
 EXIT_CODE=$?
 if [[ $EXIT_CODE != 0 ]]; then
     exit $EXIT_CODE
@@ -130,6 +130,7 @@ upload "../../main" "$REMOTE_DIR"
 upload "../../data" "$REMOTE_DIR"
 upload "resources/server_scheduler_test.py" "$REMOTE_DIR"
 upload "resources/utils.py" "$REMOTE_DIR"
+withSSH "chmod +x $REMOTE_DIR/main"
 
 echo -e "${PURPLE}Executing...${NC}"
 
@@ -145,7 +146,7 @@ echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
 
 download "$REMOTE_DIR/*.csv" "$LOG_DIR"
 
-resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
+python resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
     "$LOG_DIR"
 
 echo -e "${PURPLE}Logs: $(cd "$LOG_DIR" && pwd)${NC}"
