@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 # Uploaded via server_scheduler_test.sh
 
 from mininet.net import Mininet, Host
