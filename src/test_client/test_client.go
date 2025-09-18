@@ -85,6 +85,8 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 			tile, segment := iTile, iSegment
 
 			priority := model.LOW_PRIORITY
+
+			// Classifica a prioridade do segmento (algoritmo de adaptação)
 			if float64(counterHighPriority)/float64(counter+1) < highPriorityRatio {
 				priority = model.HIGH_PRIORITY
 				counterHighPriority++
@@ -126,13 +128,14 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 				sizeInBytes := len(requestBytes)
 
 				// Registra a request, o tamanho e realiza o cálculo da vazão instantenea
-				_, tp := collector.RecordRecv(request.ID, sizeInBytes)
+				_, instaThroughput := collector.RecordRecv(request.ID, sizeInBytes)
+				//avgThroughput := collector.AvgThroughput()
 
 				if timeToReceive == 0 {
 					fmt.Printf("Skipped (timeout) segment %d, tile %d\n", segment, tile)
 					if statisticsLogger != nil {
 						statisticsLogger.Log(time.Since(startTime), request,
-							baseLatency+segmentDuration, true, true, false, tp)
+							baseLatency+segmentDuration, true, true, false, instaThroughput)
 					}
 					return
 				}
@@ -164,7 +167,7 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 
 				if statisticsLogger != nil {
 					statisticsLogger.Log(requestTime, request,
-						responseTime-requestTime, timedOut, false, !timedOut, tp)
+						responseTime-requestTime, timedOut, false, !timedOut, instaThroughput)
 				}
 			}()
 		}
@@ -173,8 +176,14 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 	}
 
 	log.Println("Waiting for all goroutines to finish...")
-	fmt.Println("Waiting for all goroutines to finish...")
 	wg.Wait()
 	log.Println("All goroutines completed.")
 	fmt.Println("Test iteration complete.")
+}
+
+// metricas de rede (vazão instantanea + media)
+// tamanho do buffer
+// identificação do tile + segmento + prioridade (fov)
+func AdaptationAlg() {
+
 }
