@@ -9,6 +9,7 @@ import (
 	"main/src/model"
 	"main/src/test_client/netstats"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,11 +20,14 @@ import (
 // If pipeline = false, use one stream for each request.
 const pipeline = false
 
-// Proportion of medium priority
-const mediumPriorityRatio = 0.0
-
-// Proportion of high priority
-const highPriorityRatio = 0.3
+var ladder = []struct {
+	MBps float64 // Alterado de Kbps para MBps (Megabytes por segundo)
+	Enum model.Bitrate
+}{
+	{0.375, model.LOW_BITRATE},    // Aproximadamente 3 Mbps
+	{0.625, model.MEDIUM_BITRATE}, // Aproximadamente 5 Mbps
+	{1.25, model.HIGH_BITRATE},    // Aproximadamente 10 Mbps
+}
 
 func StartTestClient(serverURL string, serverPort int, parallelism int, baseLatencyMs int) {
 	client := NewClient(ClientOptions{
@@ -31,6 +35,8 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		ServerURL:  serverURL,
 		ServerPort: serverPort,
 	})
+
+	log.SetOutput(os.Stdout)
 
 	log.Println("Base latency =", baseLatencyMs)
 
@@ -84,10 +90,10 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 		log.Printf("Processing segment %d", iSegment)
 
 		// ABR logic: Adapt bitrate based on average throughput
-		avgThroughput := collector.AvgThroughput()
-		currentBitrate = adaptBitrate(avgThroughput)
+		avgThroughput := collector.AvgThroughput()         // Isto ainda retorna bytes/segundo. Precisamos converter.
+		avgThroughputMBps := avgThroughput / (1024 * 1024) // Convertendo bytes/s para MB/s
+		currentBitrate = AdaptBitrate(avgThroughputMBps)
 		log.Printf("ABR: Average Throughput = %.2f, Selected Bitrate = %d", avgThroughput, currentBitrate)
-
 
 		for iTile := 1; iTile <= 120; iTile++ {
 			tile, segment := iTile, iSegment
@@ -189,23 +195,51 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 	fmt.Println("Test iteration complete.")
 }
 
-// metricas de rede (vazão instantanea + media)
-// tamanho do buffer
-// identificação do tile + segmento + prioridade (fov)
-func AdaptationAlg() {
+// // adaptBitrate decide a taxa de bits com base na vazão média.
+//
+//	func adaptBitrate(avgThroughput float64) model.Bitrate {
+//		// Estes são thresholds arbitrários para demonstração.
+//		// Podem ser ajustados com base nos testes.
+//		// Considerando que as bitrates são 3, 5 e 10.
+//		if avgThroughput >= 8.0 {
+//			return model.HIGH_BITRATE // 10
+//		} else if avgThroughput >= 4.0 {
+//			return model.MEDIUM_BITRATE // 5
+//		} else {
+//			return model.LOW_BITRATE // 3
+//		}
+//	}
 
+func AdaptBitrate(avgThroughputMBps float64) model.Bitrate {
+	// Cria uma slice com os valores de MBps da ladder para busca
+	ladderMBpsValues := make([]float64, len(ladder))
+	for i, br := range ladder {
+		ladderMBpsValues[i] = br.MBps
+	}
+
+	const safety = 0.85
+	idx := selectByThroughput(avgThroughputMBps, ladderMBpsValues, safety)
+	return ladder[idx].Enum
 }
 
-// adaptBitrate decide a taxa de bits com base na vazão média.
-func adaptBitrate(avgThroughput float64) model.Bitrate {
-	// Estes são thresholds arbitrários para demonstração.
-	// Podem ser ajustados com base nos testes.
-	// Considerando que as bitrates são 3, 5 e 10.
-	if avgThroughput >= 8.0 {
-		return model.HIGH_BITRATE // 10
-	} else if avgThroughput >= 4.0 {
-		return model.MEDIUM_BITRATE // 5
-	} else {
-		return model.LOW_BITRATE // 3
+func selectByThroughput(avgThroughputMBps float64, ladderMBpsValues []float64, safety float64) int {
+	if len(ladderMBpsValues) == 0 {
+		return -1
 	}
+	if safety <= 0 {
+		safety = 1.0
+	}
+	target := safety * avgThroughputMBps
+
+	// Busca binária pelo maior <= target
+	// sort.SearchFloat64s é mais adequado para float64
+	i := sort.SearchFloat64s(ladderMBpsValues, target)
+	if i >= len(ladderMBpsValues) || ladderMBpsValues[i] > target { // Ajuste para encontrar o maior valor menor ou igual ao target
+		i-- // Retrocede um índice se o encontrado for maior ou se for o fim da lista
+	}
+
+	if i < 0 {
+		return 0 // nada "cabe": fica no menor bitrate
+	}
+	return i
 }
