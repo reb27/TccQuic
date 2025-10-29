@@ -3,6 +3,7 @@ module main
 go 1.19
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/lucas-clemente/quic-go v0.31.1
 	github.com/stretchr/testify v1.5.1
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e

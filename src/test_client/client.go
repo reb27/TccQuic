@@ -38,13 +38,40 @@ type Client struct {
 
 	waitingResponses      map[requestId]chan *model.VideoPacketResponse
 	waitingResponsesMutex sync.Mutex
+	replayBuffer          *ReplayBuffer // Adicionado o replay buffer aqui
+}
+
+type ReplayBuffer struct {
+	responses []*model.VideoPacketResponse
+	mutex     sync.Mutex
 }
 
 func NewClient(options ClientOptions) *Client {
 	return &Client{
 		Options:          options,
 		waitingResponses: make(map[requestId]chan *model.VideoPacketResponse),
+		replayBuffer:     NewReplayBuffer(), // Inicializa o replay buffer
 	}
+}
+
+func NewReplayBuffer() *ReplayBuffer {
+	return &ReplayBuffer{
+		responses: make([]*model.VideoPacketResponse, 0),
+	}
+}
+
+// AddResponse adiciona uma resposta ao buffer
+func (rb *ReplayBuffer) AddResponse(res *model.VideoPacketResponse) {
+	rb.mutex.Lock()
+	defer rb.mutex.Unlock()
+	rb.responses = append(rb.responses, res)
+}
+
+// GetResponses retorna todas as respostas no buffer
+func (rb *ReplayBuffer) GetResponses() []*model.VideoPacketResponse {
+	rb.mutex.Lock()
+	defer rb.mutex.Unlock()
+	return rb.responses
 }
 
 // Connect the client
@@ -82,8 +109,7 @@ func (c *Client) Connect() (err error) {
 }
 
 // Send a request
-func (c *Client) Request(
-	r model.VideoPacketRequest, timeout time.Duration) *model.VideoPacketResponse {
+func (c *Client) Request(r model.VideoPacketRequest, timeout time.Duration) *model.VideoPacketResponse {
 
 	if c.pipelineStream != nil {
 		return c.requestWithStream(c.pipelineStream, r, timeout)
@@ -110,10 +136,18 @@ func (c *Client) requestWithStream(stream quic.Stream,
 		segment: r.Segment,
 		tile:    r.Tile,
 	}
-	responseChannel := make(chan *model.VideoPacketResponse)
+	responseChannel := make(chan *model.VideoPacketResponse, 1)
 	c.waitingResponsesMutex.Lock()
 	c.waitingResponses[id] = responseChannel
 	c.waitingResponsesMutex.Unlock()
+
+	defer func() {
+		c.waitingResponsesMutex.Lock()
+		if ch, ok := c.waitingResponses[id]; ok && ch == responseChannel {
+			delete(c.waitingResponses, id)
+		}
+		c.waitingResponsesMutex.Unlock()
+	}()
 
 	// Request
 
@@ -127,8 +161,12 @@ func (c *Client) requestWithStream(stream quic.Stream,
 
 	select {
 	case res := <-responseChannel:
+		// Adiciona a resposta ao replay buffer
+		if res != nil {
+			c.replayBuffer.AddResponse(res)
+		}
 		return res
-	case <-time.After(time.Duration(timeout)):
+	case <-time.After(timeout):
 		return nil
 	}
 }
