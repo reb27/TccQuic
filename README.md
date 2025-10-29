@@ -19,5 +19,5 @@ Start Server:
 `go run main.go server wfq` will start the server with the Strict Priority Queue policy
 
 Start Client: 
-`go run main.go client` will start the client
+`go run main.go client` will start the repo client
 
