@@ -158,6 +158,15 @@ func (s *StreamHandler) Start() {
 	// run scheduler (loop de escalonamento)
 	go s.taskScheduler.Run()
 
+	// fairness (1s)
+	metrics.StartFairnessWriter(filepath.Join(remoteDir, "fairness.csv"), []int{0, 1, 2}, 1*time.Second)
+
+	// work-conserving (1s)
+	metrics.StartWorkConservingWriter(filepath.Join(remoteDir, "work_conserving.csv"), 1*time.Second)
+
+	// wfq utilization (1s) — só fará sentido se a política for WFQ; pode setar peso padrão
+	metrics.StartWFQUtilWriter(filepath.Join(remoteDir, "wfq_utilization.csv"), []int{0, 1, 2}, 1*time.Second)
+
 	log.Println("[SERVER] StreamHandler started")
 }
 
@@ -180,6 +189,11 @@ func (s *StreamHandler) Stop() {
 		s.reqlog.close()
 	}
 	log.Println("[SERVER] stopped")
+
+	metrics.StopFairnessWriter()
+	metrics.StopWorkConservingWriter()
+	metrics.StopWFQUtilWriter()
+
 }
 
 // HandleStream é chamado para cada novo stream QUIC aceito.
@@ -268,6 +282,10 @@ func (s *stream) listen() {
 
 			// 5.3) Serviço: lê arquivo e envia resposta no QUIC
 			bytes := s.handleRequestMeasured(req, deadline)
+			if bytes > 0 {
+				metrics.RecordBytesForFairness(int(req.Priority), bytes)
+				metrics.RecordBytesForWFQ(int(req.Priority), bytes)
+			}
 
 			now := time.Now()
 			svcMs := now.Sub(startedAt).Milliseconds()

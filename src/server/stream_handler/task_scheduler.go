@@ -63,6 +63,16 @@ func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
 	s.wfqWeights[model.HIGH_PRIORITY] = 3
 
 	s.cond = sync.NewCond(&s.mu)
+
+	// Expor pesos ao módulo de WFQ utilization (se for WFQ)
+	if policy == PolicyWFQ {
+		metrics.SetWFQWeights(map[int]float64{
+			int(model.LOW_PRIORITY):    float64(s.wfqWeights[model.LOW_PRIORITY]),
+			int(model.MEDIUM_PRIORITY): float64(s.wfqWeights[model.MEDIUM_PRIORITY]),
+			int(model.HIGH_PRIORITY):   float64(s.wfqWeights[model.HIGH_PRIORITY]),
+		})
+	}
+
 	return s
 }
 
@@ -80,8 +90,11 @@ func (s *Scheduler) Enqueue(p model.Priority, fn func()) bool {
 		fn:       fn,
 		enqueued: time.Now(),
 	})
-	// métrica: ENQUEUE é feito no stream_handler antes do Enqueue
-	// aqui apenas acordamos a goroutine do Run
+
+	// backlog mudou (soma de todas as filas)
+	metrics.UpdateBacklog(s.totalQueuedLocked())
+
+	// acorda a goroutine do Run
 	s.cond.Signal()
 	return true
 }
@@ -141,21 +154,31 @@ func (s *Scheduler) nextTaskBlocking() (task, bool) {
 		if s.stopped {
 			return task{}, false
 		}
-		// se houver algo, selecionar de acordo com a política
+
 		if total := s.totalQueuedLocked(); total > 0 {
+			var t task
 			switch s.policy {
 			case PolicyFIFO:
-				return s.pickFIFO(), true
+				t = s.pickFIFO()
 			case PolicySP:
-				return s.pickSP(), true
+				t = s.pickSP()
 			case PolicyWFQ:
-				return s.pickWFQ(), true
+				t = s.pickWFQ()
 			default:
-				// fallback
-				return s.pickFIFO(), true
+				t = s.pickFIFO()
 			}
+
+			// após remover a task das filas, o backlog mudou
+			metrics.UpdateBacklog(s.totalQueuedLocked())
+			// vamos começar a processar => estado busy
+			metrics.UpdateServiceState(true)
+
+			return t, true
 		}
-		// nada na fila → aguarda
+
+		// filas vazias → servidor idle (antes de bloquear)
+		metrics.UpdateServiceState(false)
+
 		s.cond.Wait()
 	}
 }
@@ -204,9 +227,7 @@ func (s *Scheduler) pickSP() task {
 		if len(s.queues[q]) > 0 {
 			t := s.queues[q][0]
 			s.queues[q] = s.queues[q][1:]
-			// métrica: inversão já é detectada em metrics.OnStart
-			// preempção: este SP é não-preemptivo; se você implementar preempção,
-			// chame metrics.M().OnPreempt(preempted, preemptor) no momento certo.
+			// (se implementar preempção real no futuro, chame metrics.M().OnPreempt)
 			return t
 		}
 	}
