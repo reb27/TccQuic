@@ -7,6 +7,7 @@ import (
 
 	"main/src/model"
 	"main/src/server/metrics"
+	"main/src/server/stream_handler/scheduler"
 )
 
 // ----------------------------- Tipos públicos -----------------------------
@@ -14,14 +15,16 @@ import (
 type QueuePolicy string
 
 const (
-	PolicyFIFO QueuePolicy = "fifo"
-	PolicySP   QueuePolicy = "sp"  // strict priority (não-preemptivo)
-	PolicyWFQ  QueuePolicy = "wfq" // weighted fair queuing simples
+	PolicyFIFO   QueuePolicy = "fifo"
+	PolicySP     QueuePolicy = "sp"     // strict priority (não-preemptivo)
+	PolicyWFQ    QueuePolicy = "wfq"    // weighted fair queuing (virtual finish time)
+	PolicyVOI_SP QueuePolicy = "voi_sp" // VoI com Strict Priority
 )
 
 // TaskScheduler é a interface usada pelo stream_handler.go
 type TaskScheduler interface {
-	Enqueue(p model.Priority, fn func()) bool
+	Enqueue(p model.Priority, req *model.VideoPacketRequest, fn func()) bool
+	SetThroughput(bytesPerSec float64)
 	Run()
 	Stop()
 }
@@ -30,6 +33,7 @@ type TaskScheduler interface {
 
 type task struct {
 	prio     model.Priority
+	req      *model.VideoPacketRequest
 	fn       func()
 	enqueued time.Time
 }
@@ -37,8 +41,12 @@ type task struct {
 type Scheduler struct {
 	policy QueuePolicy
 
-	// filas por prioridade (low=0, med=1, high=2)
+	// filas por prioridade (low=0, med=1, high=2) — usadas por FIFO, SP, VoI_SP
 	queues [int(model.PRIORITY_LEVEL_COUNT)][]task
+
+	// WFQ original (virtual finish time) — usado apenas quando policy == PolicyWFQ
+	wfqSched scheduler.Scheduler[task]
+	wfqCount int // contagem de itens no WFQ (para totalQueuedLocked)
 
 	// controle de execução
 	mu      sync.Mutex
@@ -46,10 +54,8 @@ type Scheduler struct {
 	stopped bool
 	running bool
 
-	// WFQ: pesos e estado do RR
-	wfqWeights [int(model.PRIORITY_LEVEL_COUNT)]int // default: low=1, med=2, high=3
-	wfqCursor  int
-	wfqBudget  [int(model.PRIORITY_LEVEL_COUNT)]int
+	// Bandwidth estimation para VoI
+	throughput float64
 }
 
 // NewTaskScheduler cria um escalonador com a política desejada
@@ -57,19 +63,25 @@ func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
 	s := &Scheduler{
 		policy: policy,
 	}
-	// pesos WFQ default (ajuste se quiser)
-	s.wfqWeights[model.LOW_PRIORITY] = 1
-	s.wfqWeights[model.MEDIUM_PRIORITY] = 2
-	s.wfqWeights[model.HIGH_PRIORITY] = 3
 
 	s.cond = sync.NewCond(&s.mu)
 
-	// Expor pesos ao módulo de WFQ utilization (se for WFQ)
+	// Inicializar WFQ original se necessário
 	if policy == PolicyWFQ {
+		s.wfqSched = scheduler.NewWFQ[task](10000) // capacidade alta
 		metrics.SetWFQWeights(map[int]float64{
-			int(model.LOW_PRIORITY):    float64(s.wfqWeights[model.LOW_PRIORITY]),
-			int(model.MEDIUM_PRIORITY): float64(s.wfqWeights[model.MEDIUM_PRIORITY]),
-			int(model.HIGH_PRIORITY):   float64(s.wfqWeights[model.HIGH_PRIORITY]),
+			int(model.LOW_PRIORITY):    1,
+			int(model.MEDIUM_PRIORITY): 2,
+			int(model.HIGH_PRIORITY):   3,
+		})
+	}
+
+	// Expor pesos semânticos ao módulo de WFQ utilization (para VoI)
+	if policy == PolicyVOI_SP {
+		metrics.SetWFQWeights(map[int]float64{
+			int(model.LOW_PRIORITY):    float64(model.WFQWeightFromSemantic(model.SemanticPiBackground)),
+			int(model.MEDIUM_PRIORITY): float64(model.WFQWeightFromSemantic(model.SemanticPiNearFoV)),
+			int(model.HIGH_PRIORITY):   float64(model.WFQWeightFromSemantic(model.SemanticPiFoV)),
 		})
 	}
 
@@ -78,18 +90,60 @@ func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
 
 // ----------------------------- API pública -------------------------------
 
-func (s *Scheduler) Enqueue(p model.Priority, fn func()) bool {
+func (s *Scheduler) SetThroughput(bytesPerSec float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.throughput = bytesPerSec
+}
+
+func (s *Scheduler) Enqueue(p model.Priority, req *model.VideoPacketRequest, fn func()) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopped {
 		return false
 	}
+
+	// Lógica de descarte baseada em VoI (se aplicável)
+	if s.policy == PolicyVOI_SP {
+		if req != nil && s.throughput > 0 {
+			// Calcular VoI para decidir se aceita a tarefa
+			tileSize := model.EstimateTileSize(req)
+			// Por enquanto, calculamos o VoI usando o helper do modelo
+			deadline := time.Now().Add(time.Duration(req.Timeout) * time.Millisecond)
+			voi := model.CalculateVoIForRequest(req, time.Now(), deadline, tileSize, s.throughput)
+
+			if voi <= 0 {
+				log.Printf("[SCHED] DISCARDING task seg=%d tile=%d due to VoI=%.2f (throughput=%.2f)",
+					req.Segment, req.Tile, voi, s.throughput)
+				return true // Retornamos true para indicar que a requisição foi "processada" (descartada)
+			}
+		}
+	}
+
 	// enfileira
-	s.queues[int(p)] = append(s.queues[int(p)], task{
-		prio:     p,
-		fn:       fn,
-		enqueued: time.Now(),
-	})
+	if s.policy == PolicyWFQ {
+		// Usar o WFQ original (virtual finish time)
+		entry := s.wfqSched.CreateEntry(task{
+			prio:     p,
+			req:      req,
+			fn:       fn,
+			enqueued: time.Now(),
+		})
+		// Prioridade WFQ: LOW=1, MED=2, HIGH=3
+		entry.SetPriority(float32(p) + 1)
+		if !entry.Enqueue() {
+			log.Println("[SCHED] WFQ queue full")
+			return false
+		}
+		s.wfqCount++
+	} else {
+		s.queues[int(p)] = append(s.queues[int(p)], task{
+			prio:     p,
+			req:      req,
+			fn:       fn,
+			enqueued: time.Now(),
+		})
+	}
 
 	// backlog mudou (soma de todas as filas)
 	metrics.UpdateBacklog(s.totalQueuedLocked())
@@ -160,7 +214,7 @@ func (s *Scheduler) nextTaskBlocking() (task, bool) {
 			switch s.policy {
 			case PolicyFIFO:
 				t = s.pickFIFO()
-			case PolicySP:
+			case PolicySP, PolicyVOI_SP:
 				t = s.pickSP()
 			case PolicyWFQ:
 				t = s.pickWFQ()
@@ -189,6 +243,7 @@ func (s *Scheduler) totalQueuedLocked() int {
 	for i := 0; i < int(model.PRIORITY_LEVEL_COUNT); i++ {
 		n += len(s.queues[i])
 	}
+	n += s.wfqCount
 	return n
 }
 
@@ -227,47 +282,20 @@ func (s *Scheduler) pickSP() task {
 		if len(s.queues[q]) > 0 {
 			t := s.queues[q][0]
 			s.queues[q] = s.queues[q][1:]
-			// (se implementar preempção real no futuro, chame metrics.M().OnPreempt)
 			return t
 		}
 	}
-	// não deveria chegar aqui (já verificamos total > 0)
 	return task{}
 }
 
-// WFQ simples por fatia de tarefas (peso = nº de tarefas por rodada)
+// WFQ (weighted fair queuing): usa a implementação original com virtual finish time.
 func (s *Scheduler) pickWFQ() task {
-	nClasses := int(model.PRIORITY_LEVEL_COUNT)
-	// garante orçamento inicial
-	for i := 0; i < nClasses; i++ {
-		if s.wfqBudget[i] <= 0 {
-			s.wfqBudget[i] = s.wfqWeights[i]
-		}
+	entry := s.wfqSched.Dequeue()
+	if entry == nil {
+		return task{}
 	}
-
-	checked := 0
-	for checked < nClasses {
-		q := s.wfqCursor % nClasses
-
-		if len(s.queues[q]) > 0 && s.wfqBudget[q] > 0 {
-			// serve dessa fila e consome orçamento
-			t := s.queues[q][0]
-			s.queues[q] = s.queues[q][1:]
-			s.wfqBudget[q]--
-			// fica no mesmo cursor para tentar servir +1 da mesma fila se ainda há orçamento
-			return t
-		}
-
-		// avança cursor e, se orçamento esgotado, recarrega
-		if s.wfqBudget[q] <= 0 {
-			s.wfqBudget[q] = s.wfqWeights[q]
-		}
-		s.wfqCursor = (s.wfqCursor + 1) % nClasses
-		checked++
-	}
-
-	// fallback: se nada foi escolhido (todas filas vazias no giro), devolve FIFO
-	return s.pickFIFO()
+	s.wfqCount--
+	return entry.UserData()
 }
 
 // ----------------------------- Utilidades ---------------------------------

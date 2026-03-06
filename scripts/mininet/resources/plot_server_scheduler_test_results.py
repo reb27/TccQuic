@@ -61,7 +61,6 @@ def render_client_plot(input_files, output_dir):
         rows = _read_csv(summary_files[0]) or []
         if rows:
             row = rows[0]
-            # Only the three simple metrics
             if 'segment_completion_rate_percent' in row:
                 try:
                     metrics['segment_completion_rate_percent'] = float(row['segment_completion_rate_percent'])
@@ -130,98 +129,340 @@ def render_client_plot(input_files, output_dir):
     plt.close()
 
 
-# -------------------- Server plot --------------------
+# -------------------- Server plot helpers --------------------
+def _plot_server_queue_len(ql_path, output_dir):
+    rows = _read_csv(ql_path) or []
+    if not rows:
+        print('[warn] queue_len.csv is empty')
+        return
+    by_class = {c: {'ts': [], 'len': []} for c in CLASS_ORDER}
+    for r in rows:
+        c = r.get('class')
+        if c in by_class:
+            by_class[c]['ts'].append(r.get('ts'))
+            try:
+                by_class[c]['len'].append(int(float(r.get('queue_len', '0'))))
+            except Exception:
+                by_class[c]['len'].append(0)
+
+    all_ts = []
+    for c in CLASS_ORDER:
+        all_ts.extend(by_class[c]['ts'])
+    rel_all, t0 = _rel_seconds_from_iso(all_ts)
+    if t0 is None:
+        print('[warn] Could not parse queue_len timestamps')
+        return
+    ts_map = {iso: rel for iso, rel in zip(all_ts, rel_all)}
+
+    plt.figure(figsize=(7, 4))
+    drew = False
+    for c in CLASS_ORDER:
+        if by_class[c]['ts']:
+            x = [ts_map[ts] for ts in by_class[c]['ts'] if ts in ts_map]
+            y = by_class[c]['len']
+            if x and y:
+                plt.plot(x, y, label=c, color=CLASS_COLORS.get(c))
+                drew = True
+    if not drew:
+        plt.close()
+        print('[warn] No queue_len series to draw')
+        return
+    plt.xlabel('time (s)')
+    plt.ylabel('queue length (pkts)')
+    plt.legend()
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_queue.png'))
+    plt.close()
+
+
+def _plot_server_rsp_scatter(rl_path, output_dir):
+    # Deprecated: scatter plot of response time vs time was removed
+    return
+
+
+def _plot_server_rsp_cdf(rl_path, output_dir):
+    rows = _read_csv(rl_path) or []
+    if not rows:
+        return
+    per_class = {c: [] for c in CLASS_ORDER}
+    for r in rows:
+        try:
+            c = CLASS_NAMES.get(int(r['class']), str(r['class']))
+            rsp = float(r['rsp_ms'])
+        except Exception:
+            continue
+        if c in per_class:
+            per_class[c].append(rsp)
+
+    plt.figure(figsize=(7, 4))
+    drew = False
+    for c in CLASS_ORDER:
+        xs = sorted(per_class[c])
+        if not xs:
+            continue
+        n = len(xs)
+        ys = [(i + 1) / n for i in range(n)]
+        plt.plot(xs, ys, label=c, color=CLASS_COLORS.get(c))
+        drew = True
+    if not drew:
+        plt.close()
+        return
+    plt.xlabel('response time (ms)')
+    plt.ylabel('CDF')
+    plt.legend()
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_rsp_cdf.png'))
+    plt.close()
+
+
+def _plot_server_drop_rate(rl_path, output_dir):
+    rows = _read_csv(rl_path) or []
+    if not rows:
+        return
+    counts = {c: {'tot': 0, 'drop': 0} for c in CLASS_ORDER}
+    for r in rows:
+        try:
+            c = CLASS_NAMES.get(int(r['class']), str(r['class']))
+        except Exception:
+            continue
+        if c not in counts:
+            continue
+        counts[c]['tot'] += 1
+        if _bool(r.get('drop', 'false')):
+            counts[c]['drop'] += 1
+
+    labels = []
+    values = []
+    for c in CLASS_ORDER:
+        tot = counts[c]['tot']
+        if tot == 0:
+            continue
+        dr = 100.0 * counts[c]['drop'] / tot
+        labels.append(c)
+        values.append(dr)
+
+    if not values:
+        return
+    plt.figure(figsize=(5, 4))
+    bars = plt.bar(range(len(values)), values, color=[CLASS_COLORS[c] for c in labels])
+    plt.xticks(range(len(labels)), labels)
+    plt.ylabel('drop rate (%)')
+    plt.title('Deadline drops per class')
+    for b, v in zip(bars, values):
+        plt.text(b.get_x() + b.get_width() / 2, v + 0.5, f'{v:.1f}%', ha='center', va='bottom', fontsize=8)
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_drop_rate.png'))
+    plt.close()
+
+
+def _plot_server_summary(ss_path, output_dir):
+    rows = _read_csv(ss_path) or []
+    if not rows:
+        return
+    row = rows[-1]
+
+    labels = []
+    values = []
+    key_map = {
+        'high': 'throughput_high_kbps',
+        'medium': 'throughput_med_kbps',
+        'low': 'throughput_low_kbps',
+    }
+    for c in CLASS_ORDER:
+        key = key_map.get(c)
+        if key in row:
+            try:
+                values.append(float(row[key]))
+                labels.append(c)
+            except Exception:
+                pass
+
+    if not values:
+        return
+    plt.figure(figsize=(5, 4))
+    bars = plt.bar(range(len(values)), values, color=[CLASS_COLORS[c] for c in labels])
+    plt.xticks(range(len(labels)), labels)
+    plt.ylabel('throughput (kbps)')
+    plt.title('Server throughput per class')
+    for b, v in zip(bars, values):
+        plt.text(b.get_x() + b.get_width() / 2, v + max(values) * 0.01, f'{v:.1f}', ha='center', va='bottom', fontsize=8)
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_summary.png'))
+    plt.close()
+
+
+def _plot_server_class_share(ss_path, output_dir):
+    rows = _read_csv(ss_path) or []
+    if not rows:
+        return
+    row = rows[-1]
+
+    labels = []
+    values = []
+    key_map = {
+        'high': 'class_share_high_pct',
+        'medium': 'class_share_med_pct',
+        'low': 'class_share_low_pct',
+    }
+    for c in CLASS_ORDER:
+        key = key_map.get(c)
+        if key in row:
+            try:
+                values.append(float(row[key]))
+                labels.append(c)
+            except Exception:
+                pass
+
+    if not values:
+        return
+    plt.figure(figsize=(5, 4))
+    bars = plt.bar(range(len(values)), values, color=[CLASS_COLORS[c] for c in labels])
+    plt.xticks(range(len(labels)), labels)
+    plt.ylabel('class share (%)')
+    plt.title('Traffic share per class')
+    for b, v in zip(bars, values):
+        plt.text(b.get_x() + b.get_width() / 2, v + max(values) * 0.01, f'{v:.1f}%', ha='center', va='bottom', fontsize=8)
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_class_share.png'))
+    plt.close()
+
+
+def _plot_server_work_conserving(wc_path, output_dir):
+    rows = _read_csv(wc_path) or []
+    if not rows:
+        return
+    ts = []
+    ratio = []
+    for r in rows:
+        try:
+            ts.append(r.get('ts'))
+            ratio.append(float(r.get('ratio', '0')))
+        except Exception:
+            continue
+    rel_t, t0 = _rel_seconds_from_iso(ts)
+    if t0 is None or not rel_t or not ratio:
+        return
+    plt.figure(figsize=(7, 4))
+    plt.plot(rel_t, ratio, color='tab:green')
+    plt.xlabel('time (s)')
+    plt.ylabel('busy ratio (0-1)')
+    plt.title('Work-conserving ratio over time')
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_work_conserving.png'))
+    plt.close()
+
+
+def _plot_server_backlog(wc_path, output_dir):
+    rows = _read_csv(wc_path) or []
+    if not rows:
+        return
+    ts = []
+    backlog_ms = []
+    for r in rows:
+        try:
+            ts.append(r.get('ts'))
+            backlog_ms.append(float(r.get('backlog_ms', '0')))
+        except Exception:
+            continue
+    rel_t, t0 = _rel_seconds_from_iso(ts)
+    if t0 is None or not rel_t or not backlog_ms:
+        return
+    plt.figure(figsize=(7, 4))
+    plt.plot(rel_t, backlog_ms, color='tab:purple')
+    plt.xlabel('time (s)')
+    plt.ylabel('backlog_ms (per window)')
+    plt.title('Backlog time while queue>0')
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_backlog_ms.png'))
+    plt.close()
+
+
+def _plot_server_avg_rsp_from_class_agg(ca_path, output_dir):
+    rows = _read_csv(ca_path) or []
+    if not rows:
+        return
+
+    series = {c: {'t': [], 'v': []} for c in CLASS_ORDER}
+    for r in rows:
+        try:
+            ts = r.get('ts')
+            c = r.get('class')
+            if c not in series or not ts:
+                continue
+            # avg_response_time_ms já é média acumulada até aquele ponto
+            v = float(r.get('avg_response_time_ms', '0'))
+            series[c]['t'].append(ts)
+            series[c]['v'].append(v)
+        except Exception:
+            continue
+
+    all_ts = []
+    for c in CLASS_ORDER:
+        all_ts.extend(series[c]['t'])
+    rel_all, t0 = _rel_seconds_from_iso(all_ts)
+    if t0 is None or not rel_all:
+        return
+    ts_map = {iso: rel for iso, rel in zip(all_ts, rel_all)}
+
+    plt.figure(figsize=(7, 4))
+    drew = False
+    for c in CLASS_ORDER:
+        if not series[c]['t']:
+            continue
+        x = [ts_map[ts] for ts in series[c]['t'] if ts in ts_map]
+        y = series[c]['v']
+        if x and y:
+            plt.plot(x, y, label=c, color=CLASS_COLORS.get(c))
+            drew = True
+    if not drew:
+        plt.close()
+        return
+    plt.xlabel('time (s)')
+    plt.ylabel('avg response time (ms)')
+    plt.title('Avg response time per class (class_agg)')
+    plt.legend()
+    os.makedirs(output_dir, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'server_avg_rsp_class_agg.png'))
+    plt.close()
+
+
+# -------------------- Server plot (orchestrator) --------------------
 def render_server_plot(input_files, output_dir):
-    # Prefer queue_len.csv (lines per class over time)
     ql_files = [p for p in input_files if os.path.basename(p) == 'queue_len.csv']
-    if ql_files:
-        rows = _read_csv(ql_files[0]) or []
-        if rows:
-            by_class = {c: {'ts': [], 'len': []} for c in CLASS_ORDER}
-            for r in rows:
-                c = r.get('class')
-                if c in by_class:
-                    by_class[c]['ts'].append(r.get('ts'))
-                    try:
-                        by_class[c]['len'].append(int(float(r.get('queue_len', '0'))))
-                    except Exception:
-                        by_class[c]['len'].append(0)
-
-            # Compute shared relative time
-            all_ts = []
-            for c in CLASS_ORDER:
-                all_ts.extend(by_class[c]['ts'])
-            rel_all, t0 = _rel_seconds_from_iso(all_ts)
-            if t0 is None:
-                print('[warn] Could not parse queue_len timestamps')
-                return
-            ts_map = {iso: rel for iso, rel in zip(all_ts, rel_all)}
-
-            plt.figure(figsize=(7, 4))
-            drew = False
-            for c in CLASS_ORDER:
-                if by_class[c]['ts']:
-                    x = [ts_map[ts] for ts in by_class[c]['ts'] if ts in ts_map]
-                    y = by_class[c]['len']
-                    if x and y:
-                        plt.plot(x, y, label=c, color=CLASS_COLORS.get(c))
-                        drew = True
-            if not drew:
-                plt.close()
-                print('[warn] No queue_len series to draw')
-                return
-            plt.xlabel('time (s)')
-            plt.ylabel('queue length (pkts)')
-            plt.legend()
-            os.makedirs(output_dir, exist_ok=True)
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'server.png'))
-            plt.close()
-            return
-
-    # Fallback: reqlog.csv scatter of response time by class
     rl_files = [p for p in input_files if os.path.basename(p) == 'reqlog.csv']
-    if rl_files:
-        rows = _read_csv(rl_files[0]) or []
-        if rows:
-            ns_times = []
-            classes = []
-            rsp = []
-            for r in rows:
-                try:
-                    ns_times.append(int(r['time_ns']))
-                    classes.append(CLASS_NAMES.get(int(r['class']), str(r['class'])))
-                    rsp.append(float(r['rsp_ms']))
-                except Exception:
-                    pass
-            rel_t, _ = _rel_seconds_from_ns(ns_times)
-            per_class_x = {c: [] for c in CLASS_ORDER}
-            per_class_y = {c: [] for c in CLASS_ORDER}
-            for t, c, v in zip(rel_t, classes, rsp):
-                if c in per_class_x:
-                    per_class_x[c].append(t)
-                    per_class_y[c].append(v)
-            plt.figure(figsize=(7, 4))
-            drew = False
-            for c in CLASS_ORDER:
-                x, y = per_class_x[c], per_class_y[c]
-                if x and y:
-                    plt.scatter(x, y, s=2, label=c, color=CLASS_COLORS.get(c))
-                    drew = True
-            if not drew:
-                plt.close()
-                print('[warn] No reqlog points to draw')
-                return
-            plt.xlabel('time (s)')
-            plt.ylabel('response time (ms)')
-            plt.legend()
-            os.makedirs(output_dir, exist_ok=True)
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'server.png'))
-            plt.close()
-            return
+    ss_files = [p for p in input_files if os.path.basename(p) == 'server_summary.csv']
+    wc_files = [p for p in input_files if os.path.basename(p) == 'work_conserving.csv']
+    ca_files = [p for p in input_files if os.path.basename(p) == 'class_agg.csv']
 
-    print('[warn] No server inputs found (queue_len.csv or reqlog.csv)')
+    if not (ql_files or rl_files or ss_files or wc_files or ca_files):
+        print('[warn] No server inputs found (queue_len.csv, reqlog.csv, server_summary.csv, work_conserving.csv or class_agg.csv)')
+        return
+
+    if ql_files:
+        _plot_server_queue_len(ql_files[0], output_dir)
+
+    if rl_files:
+        _plot_server_rsp_cdf(rl_files[0], output_dir)
+        _plot_server_drop_rate(rl_files[0], output_dir)
+
+    if ss_files:
+        _plot_server_summary(ss_files[0], output_dir)
+        _plot_server_class_share(ss_files[0], output_dir)
+
+    if wc_files:
+        _plot_server_work_conserving(wc_files[0], output_dir)
+        _plot_server_backlog(wc_files[0], output_dir)
+
+    if ca_files:
+        _plot_server_avg_rsp_from_class_agg(ca_files[0], output_dir)
 
 
 def main():

@@ -16,12 +16,15 @@ func TestWriteRequest(t *testing.T) {
 		Bitrate:  2,
 		Segment:  3,
 		Tile:     4,
+		FoV:      false,
 		Timeout:  2000,
 	}).Write(buf)
 	expected := []byte(`Priority: 1
 Bitrate: 2
 Segment: 3
 Tile: 4
+FoV: false
+SemanticPriority: 0
 Timeout: 2000
 
 `)
@@ -34,6 +37,8 @@ func TestReadRequest(t *testing.T) {
 Bitrate: 2
 Segment: 3
 Tile: 4
+FoV: true
+SemanticPriority: 0.6
 Timeout: 2000
 
 `))
@@ -46,6 +51,8 @@ Timeout: 2000
 	assert.Equal(t, 2, int(req.Bitrate))
 	assert.Equal(t, 3, req.Segment)
 	assert.Equal(t, 4, req.Tile)
+	assert.True(t, req.FoV)
+	assert.InDelta(t, 0.6, float64(req.SemanticPriority), 1e-5)
 	assert.Equal(t, 2000, req.Timeout)
 }
 

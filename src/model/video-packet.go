@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,9 @@ type VideoPacketRequest struct {
 	Bitrate  Bitrate
 	Segment  int
 	Tile     int
+	FoV      bool // Indica se o tile está no campo de visão
+	// Prioridade semântica pi (0..1) para VoI/WFQ: FoV=1.0, Near-FoV=0.6, Background=0.2. Se 0, deriva-se de FoV.
+	SemanticPriority float32
 	// [milliseconds] If this timeout elapses, do not send a response.
 	Timeout int
 }
@@ -36,8 +40,8 @@ func (r *VideoPacketRequest) Write(writer io.Writer) (err error) {
 	// Followed by empty line
 	// Followed by optional data
 	_, err = fmt.Fprintf(writer,
-		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\nTimeout: %d\n\n",
-		r.Priority, r.Bitrate, r.Segment, r.Tile, r.Timeout)
+		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\nFoV: %t\nSemanticPriority: %g\nTimeout: %d\n\n",
+		r.Priority, r.Bitrate, r.Segment, r.Tile, r.FoV, r.SemanticPriority, r.Timeout)
 	return
 }
 
@@ -91,6 +95,13 @@ func ReadVideoPacketRequest(reader *bufio.Reader) (req *VideoPacketRequest, err 
 				return
 			}
 			request.Tile = intValue
+		case "FoV":
+			request.FoV = (value == "true")
+		case "SemanticPriority":
+			var f float64
+			if _, parseErr := fmt.Sscanf(value, "%f", &f); parseErr == nil {
+				request.SemanticPriority = float32(f)
+			}
 		case "Timeout":
 			var intValue int
 			if intValue, err = strconv.Atoi(value); err != nil {
@@ -186,4 +197,16 @@ func ReadVideoPacketResponse(reader *bufio.Reader) (res *VideoPacketResponse, er
 			}
 		}
 	}
+}
+
+// EstimateTileSize retorna o tamanho em bytes do arquivo do tile no disco (estimativa para VoI).
+func EstimateTileSize(req *VideoPacketRequest) int64 {
+	basePath, _ := os.Getwd()
+	full := fmt.Sprintf("%s/data/segments/video_tiled_10_dash_track%d_%d.m4s",
+		basePath, req.Segment, req.Tile)
+	st, err := os.Stat(full)
+	if err != nil {
+		return 200000 // Fallback se arquivo não existir
+	}
+	return st.Size()
 }

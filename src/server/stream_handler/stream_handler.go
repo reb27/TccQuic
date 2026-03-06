@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"main/src/model"
+	"main/src/server/bandwidth"
 	"main/src/server/metrics"
 	"os"
 	"path/filepath"
@@ -98,6 +99,7 @@ type QueueLenProvider interface {
 // StreamHandler orquestra o loop de leitura de streams e o escalonamento.
 type StreamHandler struct {
 	taskScheduler TaskScheduler
+	bwTracker     *bandwidth.Tracker // Rastreador de vazão
 
 	reqlog       *csvSink // CSV por requisição
 	queueSampler *time.Ticker
@@ -108,6 +110,7 @@ type StreamHandler struct {
 func NewStreamHandler(policy QueuePolicy) *StreamHandler {
 	return &StreamHandler{
 		taskScheduler: NewTaskScheduler(policy),
+		bwTracker:     bandwidth.NewTracker(2 * time.Second), // Janela de 2s
 	}
 }
 
@@ -166,6 +169,21 @@ func (s *StreamHandler) Start() {
 
 	// wfq utilization (1s) — só fará sentido se a política for WFQ; pode setar peso padrão
 	metrics.StartWFQUtilWriter(filepath.Join(remoteDir, "wfq_utilization.csv"), []int{0, 1, 2}, 1*time.Second)
+
+	// Loop para atualizar estimativa de banda no scheduler
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		for {
+			select {
+			case <-ticker.C:
+				throughput := s.bwTracker.GetThroughput()
+				s.taskScheduler.SetThroughput(throughput)
+			case <-s.stopSample:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 
 	log.Println("[SERVER] StreamHandler started")
 }
@@ -270,7 +288,7 @@ func (s *stream) listen() {
 
 		// 5) Enfileirar no escalonador conforme a política
 		s.usageCount++
-		ok := s.taskScheduler.Enqueue(req.Priority, func() {
+		ok := s.taskScheduler.Enqueue(req.Priority, req, func() {
 			defer s.decreaseUsageCount()
 
 			// 5.1) START (marca início de serviço e computa slack/inversão)
@@ -296,7 +314,7 @@ func (s *stream) listen() {
 			// 5.4) MÉTRICAS (agregados): COMPLETE vs DROP por deadline
 			if deadlineDrop {
 				// estimar "stale bytes" usando tamanho do arquivo (se existir)
-				est := int64(estimateTileSize(req))
+				est := model.EstimateTileSize(req)
 				metrics.M().OnDeadlineDropWithBytes(ctx, est)
 			} else {
 				metrics.M().OnComplete(ctx, bytes /*dropped=*/, false)
@@ -370,6 +388,11 @@ func (s *stream) handleRequestMeasured(req *model.VideoPacketRequest, deadline t
 		return 0
 	}
 
+	// Registrar bytes no rastreador de banda
+	if s.parent != nil && s.parent.bwTracker != nil {
+		s.parent.bwTracker.Add(len(data))
+	}
+
 	log.Printf("[RESP] sent seg=%d tile=%d bytes=%d", req.Segment, req.Tile, len(data))
 	return len(data)
 }
@@ -389,16 +412,4 @@ func readFile(req *model.VideoPacketRequest) []byte {
 		return nil
 	}
 	return data
-}
-
-// estimateTileSize retorna tamanho do arquivo do tile (ou 0 se faltante).
-func estimateTileSize(req *model.VideoPacketRequest) int64 {
-	basePath, _ := os.Getwd()
-	full := fmt.Sprintf("%s/data/segments/video_tiled_10_dash_track%d_%d.m4s",
-		basePath, req.Segment, req.Tile)
-	st, err := os.Stat(full)
-	if err != nil {
-		return 0
-	}
-	return st.Size()
 }

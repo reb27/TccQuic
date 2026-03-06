@@ -708,13 +708,19 @@ func runTestIteration(client *Client, parallelism int, baseLatencyMs int,
 				}
 				var instaThroughput float64
 
+				semanticPriority := model.SemanticPiBackground
+				if inFOV {
+					semanticPriority = model.SemanticPiFoV
+				}
+
 				request := model.VideoPacketRequest{
-					ID:       uuid.Must(uuid.New(), nil),
-					Priority: priority,
-					Bitrate:  bitrate,
-					Segment:  tileID,
-					Tile:     segmentID,
-					Timeout:  timeoutMs,
+					ID:               uuid.Must(uuid.New(), nil),
+					Priority:         priority,
+					Bitrate:          bitrate,
+					Segment:          tileID,
+					Tile:             segmentID,
+					SemanticPriority: float32(semanticPriority),
+					Timeout:          timeoutMs,
 				}
 
 				fmt.Printf("Sending request for segment %d, tile %d (priority=%d, FOV=%t)\n", segmentID, tileID, priority, inFOV)

@@ -18,8 +18,9 @@ type WFQUtil struct {
 	stop    chan struct{}
 	classes []ClassInt
 
-	weights map[ClassInt]float64 // pesos alvo normalizados
-	bytes   map[ClassInt]int64   // bytes por janela
+	weights    map[ClassInt]float64 // pesos alvo normalizados
+	rawWeights map[ClassInt]float64 // pesos brutos (não normalizados)
+	bytes      map[ClassInt]int64   // bytes por janela
 }
 
 var wfqOnce sync.Once
@@ -38,17 +39,21 @@ func StartWFQUtilWriter(csvPath string, classes []ClassInt, interval time.Durati
 				"ts", "w_low", "w_medium", "w_high",
 				"share_low", "share_medium", "share_high",
 				"err_low", "err_medium", "err_high", "mae",
+				"bytes_low", "bytes_medium", "bytes_high",
+				"raw_w_low", "raw_w_medium", "raw_w_high",
+				"ratio_low", "ratio_medium", "ratio_high",
 			})
 			w.Flush()
 		}
 		wfqInst = &WFQUtil{
-			file:    f,
-			w:       w,
-			ticker:  time.NewTicker(interval),
-			stop:    make(chan struct{}),
-			classes: classes,
-			weights: map[ClassInt]float64{},
-			bytes:   map[ClassInt]int64{},
+			file:       f,
+			w:          w,
+			ticker:     time.NewTicker(interval),
+			stop:       make(chan struct{}),
+			classes:    classes,
+			weights:    map[ClassInt]float64{},
+			rawWeights: map[ClassInt]float64{},
+			bytes:      map[ClassInt]int64{},
 		}
 		go wfqInst.loop()
 	})
@@ -77,9 +82,11 @@ func SetWFQWeights(weights map[ClassInt]float64) {
 	}
 	wfqInst.mu.Lock()
 	wfqInst.weights = map[ClassInt]float64{}
+	wfqInst.rawWeights = map[ClassInt]float64{}
 	if sum > 0 {
 		for _, c := range wfqInst.classes {
 			wfqInst.weights[c] = weights[c] / sum
+			wfqInst.rawWeights[c] = weights[c]
 		}
 	}
 	wfqInst.mu.Unlock()
@@ -123,12 +130,27 @@ func (u *WFQUtil) loop() {
 			}
 			mae /= float64(len(u.classes))
 
+			// Calcular razão throughput/weight por classe
+			ratio := map[ClassInt]float64{}
+			for _, c := range u.classes {
+				if u.rawWeights[c] > 0 {
+					ratio[c] = float64(u.bytes[c]) / u.rawWeights[c]
+				} else {
+					ratio[c] = 0
+				}
+			}
+
 			rec := []string{
 				now.Format(time.RFC3339Nano),
 				f614(u.weights[0]), f614(u.weights[1]), f614(u.weights[2]),
 				f614(obs[0]), f614(obs[1]), f614(obs[2]),
 				f614(err[0]), f614(err[1]), f614(err[2]),
 				f614(mae),
+				strconv.FormatInt(u.bytes[0], 10),
+				strconv.FormatInt(u.bytes[1], 10),
+				strconv.FormatInt(u.bytes[2], 10),
+				f614(u.rawWeights[0]), f614(u.rawWeights[1]), f614(u.rawWeights[2]),
+				f614(ratio[0]), f614(ratio[1]), f614(ratio[2]),
 			}
 			_ = u.w.Write(rec)
 			u.w.Flush()
