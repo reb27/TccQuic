@@ -303,6 +303,10 @@ func (s *stream) listen() {
 			if bytes > 0 {
 				metrics.RecordBytesForFairness(int(req.Priority), bytes)
 				metrics.RecordBytesForWFQ(int(req.Priority), bytes)
+				// alimenta contadores internos do scheduler para ajuste dinâmico de pesos
+				if rec, ok := s.taskScheduler.(WFQBytesRecorder); ok {
+					rec.RecordWFQBytes(req.Priority, bytes)
+				}
 			}
 
 			now := time.Now()

@@ -2,6 +2,7 @@ package stream_handler
 
 import (
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -9,6 +10,12 @@ import (
 	"main/src/server/metrics"
 	"main/src/server/stream_handler/scheduler"
 )
+
+// WFQBytesRecorder é implementada pelo Scheduler quando policy == PolicyWFQ.
+// O stream_handler usa type-assertion para reportar bytes enviados por classe.
+type WFQBytesRecorder interface {
+	RecordWFQBytes(prio model.Priority, n int)
+}
 
 // ----------------------------- Tipos públicos -----------------------------
 
@@ -48,6 +55,10 @@ type Scheduler struct {
 	wfqSched scheduler.Scheduler[task]
 	wfqCount int // contagem de itens no WFQ (para totalQueuedLocked)
 
+	// Pesos dinâmicos WFQ (Algoritmo 1 do paper)
+	wfqBytes [3]int64   // bytes acumulados por classe (LOW=0, MED=1, HIGH=2)
+	wfqPhi   [3]float64 // share normalizado φ atual por classe (estado EMA)
+
 	// controle de execução
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -66,9 +77,11 @@ func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
 
 	s.cond = sync.NewCond(&s.mu)
 
-	// Inicializar WFQ original se necessário
+	// Inicializar WFQ com pesos dinâmicos
 	if policy == PolicyWFQ {
 		s.wfqSched = scheduler.NewWFQ[task](10000) // capacidade alta
+		// φ_base_p = W_p / W_total  →  {1/6, 2/6, 3/6}
+		s.wfqPhi = [3]float64{1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0}
 		metrics.SetWFQWeights(map[int]float64{
 			int(model.LOW_PRIORITY):    1,
 			int(model.MEDIUM_PRIORITY): 2,
@@ -122,15 +135,15 @@ func (s *Scheduler) Enqueue(p model.Priority, req *model.VideoPacketRequest, fn 
 
 	// enfileira
 	if s.policy == PolicyWFQ {
-		// Usar o WFQ original (virtual finish time)
+		// Usar o WFQ com peso dinâmico atual da classe
 		entry := s.wfqSched.CreateEntry(task{
 			prio:     p,
 			req:      req,
 			fn:       fn,
 			enqueued: time.Now(),
 		})
-		// Prioridade WFQ: LOW=1, MED=2, HIGH=3
-		entry.SetPriority(float32(p) + 1)
+		// peso = φ_p_norm * W_total (dinâmico, atualizado pelo recalcWFQWeights)
+		entry.SetPriority(float32(s.wfqPhi[int(p)] * 6.0))
 		if !entry.Enqueue() {
 			log.Println("[SCHED] WFQ queue full")
 			return false
@@ -288,14 +301,98 @@ func (s *Scheduler) pickSP() task {
 	return task{}
 }
 
-// WFQ (weighted fair queuing): usa a implementação original com virtual finish time.
+// WFQ (weighted fair queuing): recalcula pesos dinâmicos a cada rounding, depois faz dequeue.
 func (s *Scheduler) pickWFQ() task {
+	s.recalcWFQWeights() // Algoritmo 1 do paper — roda a cada rounding
 	entry := s.wfqSched.Dequeue()
 	if entry == nil {
 		return task{}
 	}
 	s.wfqCount--
 	return entry.UserData()
+}
+
+// recalcWFQWeights implementa o Algoritmo 1 do paper para P=3 classes.
+// Roda dentro do lock de nextTaskBlocking (via pickWFQ), portanto acessa
+// wfqBytes e wfqPhi sem necessidade de lock adicional.
+func (s *Scheduler) recalcWFQWeights() {
+	const (
+		K      = 1.0  // ganho global
+		beta   = 1.0  // sensibilidade ao workload
+		alpha  = 0.3  // taxa EMA
+		epsMin = 0.05 // share mínimo por fila
+		epsMax = 0.05 // headroom máximo
+		Wtotal = 6.0  // 1+2+3 — escala dos pesos de saída
+	)
+	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda)
+	phiBase := [3]float64{1.0 / Wtotal, 2.0 / Wtotal, 3.0 / Wtotal}
+
+	// Passo 1: total de bytes acumulados
+	var total int64
+	for _, b := range s.wfqBytes {
+		total += b
+	}
+	if total == 0 {
+		return // sem tráfego ainda, manter pesos iniciais
+	}
+
+	// Passos 2–4: para cada classe p ∈ {LOW, MED, HIGH}
+	phi := s.wfqPhi
+	for p := 0; p < 3; p++ {
+		// Passo 1: workload share medido
+		xp := float64(s.wfqBytes[p]) / float64(total)
+		// Passo 2: candidato (fórmula do paper)
+		phiCand := K * math.Pow(xp, beta) * phiBase[p]
+		// Passo 3: clamp — nenhuma fila some ou domina
+		if phiCand < epsMin {
+			phiCand = epsMin
+		}
+		if phiCand > 1.0-epsMax {
+			phiCand = 1.0 - epsMax
+		}
+		// Passo 4: suavização EMA
+		phi[p] = (1.0-alpha)*phi[p] + alpha*phiCand
+	}
+
+	// Passo 5: normalizar para que sum(φ_p) == 1
+	var phiSum float64
+	for _, v := range phi {
+		phiSum += v
+	}
+	for p := range phi {
+		phi[p] /= phiSum
+	}
+
+	// Passo 6: converter φ → peso WFQ e publicar
+	adapted := phi != s.wfqPhi
+	s.wfqPhi = phi
+
+	newWeights := map[int]float64{
+		int(model.LOW_PRIORITY):    phi[0] * Wtotal,
+		int(model.MEDIUM_PRIORITY): phi[1] * Wtotal,
+		int(model.HIGH_PRIORITY):   phi[2] * Wtotal,
+	}
+	metrics.SetWFQWeights(newWeights)
+	metrics.SetWFQAdapted(adapted)
+
+	log.Printf("[WFQ-DYN] x=%.2f/%.2f/%.2f φ=%.3f/%.3f/%.3f W=%.2f/%.2f/%.2f adapted=%v",
+		float64(s.wfqBytes[0])/float64(total),
+		float64(s.wfqBytes[1])/float64(total),
+		float64(s.wfqBytes[2])/float64(total),
+		phi[0], phi[1], phi[2],
+		phi[0]*Wtotal, phi[1]*Wtotal, phi[2]*Wtotal,
+		adapted)
+}
+
+// RecordWFQBytes acumula bytes enviados por classe para o recálculo dinâmico.
+// Implementa a interface WFQBytesRecorder.
+func (s *Scheduler) RecordWFQBytes(prio model.Priority, n int) {
+	if s.policy != PolicyWFQ {
+		return
+	}
+	s.mu.Lock()
+	s.wfqBytes[int(prio)] += int64(n)
+	s.mu.Unlock()
 }
 
 // ----------------------------- Utilidades ---------------------------------

@@ -12,6 +12,7 @@ showUsage() {
     echo "-p N                    Select paralellism"
     echo "--delay N               Select delay"
     echo "--load N                Select load %"
+    echo "--fov NAME              Select FoV trace: narrow, normal, wide"
     echo "-o DIR                  Select output directory"
 }
 
@@ -23,6 +24,7 @@ PARALELLISM="128"
 DELAY="40"
 LOAD="70"
 BASE_LATENCY="800"
+FOV_MODE="normal"
 IP=
 LOG_DIR=
 
@@ -38,6 +40,7 @@ while [[ "$#" > 0 ]]; do
     -p)     PARALELLISM="$2"                ; shift 2 ;;
     --delay) DELAY="$2"                     ; shift 2 ;;
     --load) LOAD="$2"                       ; shift 2 ;;
+    --fov)   FOV_MODE="$2"                  ; shift 2 ;;
     -o)     LOG_DIR="$2"                    ; shift 2 ;;
     -*)     showUsage ; exit 1              ; shift   ;;
     *)      IP="$1"                         ; shift   ;;
@@ -118,6 +121,13 @@ download() {
 
 REMOTE_DIR=/tmp/server_scheduler_test
 
+case "$FOV_MODE" in
+    narrow) FOV_TRACE_PATH="$REMOTE_DIR/data/user_fov_narrow.csv" ;;
+    wide)   FOV_TRACE_PATH="$REMOTE_DIR/data/user_fov_wide.csv" ;;
+    normal) FOV_TRACE_PATH="$REMOTE_DIR/data/user_fov.csv" ;;
+    *)      echo "FoV inválido: $FOV_MODE (use narrow, normal ou wide)" ; exit 1 ;;
+esac
+
 echo -e "${PURPLE}Compiling...${NC}"
 
 (cd ../.. && go build)
@@ -145,6 +155,7 @@ withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
+            FOV_TRACE_PATH='$FOV_TRACE_PATH' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 EXIT_CODE=$?
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"

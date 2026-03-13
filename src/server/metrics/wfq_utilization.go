@@ -21,10 +21,36 @@ type WFQUtil struct {
 	weights    map[ClassInt]float64 // pesos alvo normalizados
 	rawWeights map[ClassInt]float64 // pesos brutos (não normalizados)
 	bytes      map[ClassInt]int64   // bytes por janela
+	adapted    bool                 // houve recálculo dinâmico nesta janela?
 }
 
 var wfqOnce sync.Once
 var wfqInst *WFQUtil
+var pendingWFQWeights map[ClassInt]float64
+
+func cloneWeights(weights map[ClassInt]float64) map[ClassInt]float64 {
+	cloned := make(map[ClassInt]float64, len(weights))
+	for k, v := range weights {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func applyWFQWeightsLocked(u *WFQUtil, weights map[ClassInt]float64) {
+	u.weights = map[ClassInt]float64{}
+	u.rawWeights = map[ClassInt]float64{}
+	var sum float64
+	for _, c := range u.classes {
+		sum += weights[c]
+	}
+	if sum <= 0 {
+		return
+	}
+	for _, c := range u.classes {
+		u.weights[c] = weights[c] / sum
+		u.rawWeights[c] = weights[c]
+	}
+}
 
 func StartWFQUtilWriter(csvPath string, classes []ClassInt, interval time.Duration) {
 	wfqOnce.Do(func() {
@@ -42,6 +68,7 @@ func StartWFQUtilWriter(csvPath string, classes []ClassInt, interval time.Durati
 				"bytes_low", "bytes_medium", "bytes_high",
 				"raw_w_low", "raw_w_medium", "raw_w_high",
 				"ratio_low", "ratio_medium", "ratio_high",
+				"adapted",
 			})
 			w.Flush()
 		}
@@ -54,6 +81,11 @@ func StartWFQUtilWriter(csvPath string, classes []ClassInt, interval time.Durati
 			weights:    map[ClassInt]float64{},
 			rawWeights: map[ClassInt]float64{},
 			bytes:      map[ClassInt]int64{},
+		}
+		if len(pendingWFQWeights) > 0 {
+			wfqInst.mu.Lock()
+			applyWFQWeightsLocked(wfqInst, pendingWFQWeights)
+			wfqInst.mu.Unlock()
 		}
 		go wfqInst.loop()
 	})
@@ -72,23 +104,23 @@ func StopWFQUtilWriter() {
 
 // defina os pesos WFQ (ex.: {low:1, medium:2, high:3})
 func SetWFQWeights(weights map[ClassInt]float64) {
+	pendingWFQWeights = cloneWeights(weights)
 	if wfqInst == nil {
 		return
 	}
-	// normaliza p/ somar 1
-	var sum float64
-	for _, c := range wfqInst.classes {
-		sum += weights[c]
+	wfqInst.mu.Lock()
+	applyWFQWeightsLocked(wfqInst, weights)
+	wfqInst.mu.Unlock()
+}
+
+// SetWFQAdapted sinaliza se houve recálculo dinâmico de pesos nesta janela.
+// Chamada por recalcWFQWeights() a cada rounding.
+func SetWFQAdapted(v bool) {
+	if wfqInst == nil {
+		return
 	}
 	wfqInst.mu.Lock()
-	wfqInst.weights = map[ClassInt]float64{}
-	wfqInst.rawWeights = map[ClassInt]float64{}
-	if sum > 0 {
-		for _, c := range wfqInst.classes {
-			wfqInst.weights[c] = weights[c] / sum
-			wfqInst.rawWeights[c] = weights[c]
-		}
-	}
+	wfqInst.adapted = v
 	wfqInst.mu.Unlock()
 }
 
@@ -140,6 +172,10 @@ func (u *WFQUtil) loop() {
 				}
 			}
 
+			adaptedStr := "0"
+			if u.adapted {
+				adaptedStr = "1"
+			}
 			rec := []string{
 				now.Format(time.RFC3339Nano),
 				f614(u.weights[0]), f614(u.weights[1]), f614(u.weights[2]),
@@ -151,12 +187,14 @@ func (u *WFQUtil) loop() {
 				strconv.FormatInt(u.bytes[2], 10),
 				f614(u.rawWeights[0]), f614(u.rawWeights[1]), f614(u.rawWeights[2]),
 				f614(ratio[0]), f614(ratio[1]), f614(ratio[2]),
+				adaptedStr,
 			}
 			_ = u.w.Write(rec)
 			u.w.Flush()
 			for k := range u.bytes {
 				u.bytes[k] = 0
 			}
+			u.adapted = false // resetar após gravar
 			u.mu.Unlock()
 		}
 	}
