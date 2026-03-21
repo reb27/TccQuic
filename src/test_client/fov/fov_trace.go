@@ -1,4 +1,4 @@
-package test_client
+package fov
 
 import (
 	"bufio"
@@ -9,21 +9,12 @@ import (
 	"time"
 )
 
-// O FOVTrace armazena o mapeamento entre segmentos de mídia (tempo) e os tiles que
-// estavam dentro do campo de visão do usuário durante esse período.
 type FOVTrace struct {
 	framesPerSegment int
 	tilesBySegment   map[int]map[int]struct{}
 	maxSegment       int
 }
 
-// LoadFOVTrace analisa um rastreamento CSV com o seguinte formato:
-// nº de quadros, números de blocos
-// 00001, 49, 50, ...
-//
-// A primeira coluna é o número do quadro (indexado a partir de 1), as colunas restantes são
-// identificadores de tiles vistos dentro do campo de visão. O carregador agrupa os quadros de acordo com
-// fps e duração do segmento para obter a lista de blocos por segmento de mídia.
 func LoadFOVTrace(path string, fps int, segmentDuration time.Duration) (*FOVTrace, error) {
 	if fps <= 0 {
 		return nil, fmt.Errorf("invalid fps=%d", fps)
@@ -54,11 +45,8 @@ func LoadFOVTrace(path string, fps int, segmentDuration time.Duration) (*FOVTrac
 		line := strings.TrimSpace(scanner.Text())
 		lineNo++
 
-		// Skip header if present
-		if lineNo == 1 {
-			if strings.Contains(line, "frames") {
-				continue
-			}
+		if lineNo == 1 && strings.Contains(line, "frames") {
+			continue
 		}
 		if len(line) == 0 {
 			continue
@@ -115,9 +103,6 @@ func LoadFOVTrace(path string, fps int, segmentDuration time.Duration) (*FOVTrac
 	return trace, nil
 }
 
-// TilesForSegment retorna uma slice com os tiles que estavam dentro do campo de visão (FOV) para
-// o índice do segmento de mídia fornecido. A slice é uma cópia e pode ser modificada por
-// quem a chamou.
 func (t *FOVTrace) TilesForSegment(segment int) []int {
 	if t == nil || segment <= 0 {
 		return nil
@@ -133,7 +118,6 @@ func (t *FOVTrace) TilesForSegment(segment int) []int {
 	return result
 }
 
-// Contém informações sobre se o tile fornecido estava dentro do campo de visão (FOV) para o índice de segmento de mídia fornecido.
 func (t *FOVTrace) Contains(segment int, tile int) bool {
 	if t == nil || segment <= 0 {
 		return false
@@ -146,7 +130,6 @@ func (t *FOVTrace) Contains(segment int, tile int) bool {
 	return ok
 }
 
-// MaxSegment returns the largest media-segment index present in the trace.
 func (t *FOVTrace) MaxSegment() int {
 	if t == nil {
 		return 0

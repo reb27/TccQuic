@@ -1,4 +1,4 @@
-package test_client
+package session
 
 import (
 	"log"
@@ -20,12 +20,7 @@ type PlaybackSimulator struct {
 
 const maxBufferedSegmentsAhead = 3
 
-func NewPlaybackSimulator(
-	segmentDuration time.Duration,
-	baseLatency time.Duration,
-	firstSegment int,
-	lastSegment int,
-) *PlaybackSimulator {
+func NewPlaybackSimulator(segmentDuration time.Duration, baseLatency time.Duration, firstSegment int, lastSegment int) *PlaybackSimulator {
 	mutex := new(sync.Mutex)
 	cond := sync.NewCond(mutex)
 	return &PlaybackSimulator{
@@ -33,11 +28,10 @@ func NewPlaybackSimulator(
 		segmentPlaybackTime:    make([]time.Time, lastSegment+1),
 		mutex:                  mutex,
 		cond:                   cond,
-
-		segmentDuration: segmentDuration,
-		baseLatency:     baseLatency,
-		firstSegment:    firstSegment,
-		lastSegment:     lastSegment,
+		segmentDuration:        segmentDuration,
+		baseLatency:            baseLatency,
+		firstSegment:           firstSegment,
+		lastSegment:            lastSegment,
 	}
 }
 
@@ -53,9 +47,7 @@ func (p *PlaybackSimulator) Start() {
 	go func() {
 		for playbackSegment := p.firstSegment; playbackSegment <= p.lastSegment; playbackSegment++ {
 			time.Sleep(time.Until(p.segmentPlaybackTime[playbackSegment]))
-
 			log.Printf("Playback %d", playbackSegment)
-
 			p.mutex.Lock()
 			p.currentPlaybackSegment = playbackSegment
 			p.mutex.Unlock()
@@ -72,11 +64,6 @@ func (p *PlaybackSimulator) WaitForPlaybackStart(segment int) {
 	p.mutex.Unlock()
 }
 
-// WaitUntilWithinPrefetchWindow bloqueia até que o segmento desejado
-// esteja dentro da janela de pré-buffer permitida à frente da reprodução.
-//
-// Permite que o cliente antecipe o download de segmentos à frente, mas sem
-// ultrapassar a janela de segurança definida em maxBufferedSegmentsAhead.
 func (p *PlaybackSimulator) WaitUntilWithinPrefetchWindow(segment int) {
 	p.mutex.Lock()
 	for (segment - p.currentPlaybackSegment) > maxBufferedSegmentsAhead {
@@ -85,56 +72,38 @@ func (p *PlaybackSimulator) WaitUntilWithinPrefetchWindow(segment int) {
 	p.mutex.Unlock()
 }
 
-// Returns the time remanining until segment starts being played.
-//
-// Returns 0 if the segment was already played or if it is not currently in
-// the buffer.
 func (p *PlaybackSimulator) GetTimeToReceive(segment int) time.Duration {
-	var result time.Duration = 0
-
+	result := time.Duration(0)
 	p.mutex.Lock()
 	if segment > p.currentPlaybackSegment {
 		result = time.Until(p.segmentPlaybackTime[segment])
 	}
 	p.mutex.Unlock()
-
 	if result < 0 {
 		return 0
-	} else {
-		return result
 	}
+	return result
 }
 
-// GetBufferLevel retorna nivel atual do buffer
-// diferenca entre o ultimo segmento baixado e o proximo segmento a ser reproduzido
 func (p *PlaybackSimulator) GetBufferLevel(lastDownloadedSegment int) time.Duration {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-
 	if lastDownloadedSegment <= p.currentPlaybackSegment {
-		return 0 // Buffer vazio ou segmento atual já reproduzido
+		return 0
 	}
-
-	// Calcula o tempo total de mídia disponível no buffer
-	// Correção: Adiciona a duração do segmento para obter o tempo de *término* do último segmento baixado
 	bufferEndTime := p.segmentPlaybackTime[lastDownloadedSegment].Add(p.segmentDuration)
-	playbackTime := p.segmentPlaybackTime[p.currentPlaybackSegment+1] // Tempo que o próximo segmento deveria começar a tocar
-
+	playbackTime := p.segmentPlaybackTime[p.currentPlaybackSegment+1]
 	if bufferEndTime.Before(playbackTime) || bufferEndTime.Equal(playbackTime) {
 		return 0
 	}
-
 	bufferLevel := bufferEndTime.Sub(playbackTime)
 	maxBuffer := time.Duration(maxBufferedSegmentsAhead) * p.segmentDuration
 	if bufferLevel > maxBuffer {
 		return maxBuffer
 	}
-
 	return bufferLevel
 }
 
-// GetPlaybackStartTime retorna o instante simulado de início da reprodução
-// (start play) para o primeiro segmento. Útil para métricas como Join latency.
 func (p *PlaybackSimulator) GetPlaybackStartTime() time.Time {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
