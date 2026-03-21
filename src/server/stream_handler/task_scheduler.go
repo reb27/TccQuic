@@ -56,8 +56,9 @@ type Scheduler struct {
 	wfqCount int // contagem de itens no WFQ (para totalQueuedLocked)
 
 	// Pesos dinâmicos WFQ (Algoritmo 1 do paper)
-	wfqBytes [3]int64   // bytes acumulados por classe (LOW=0, MED=1, HIGH=2)
-	wfqPhi   [3]float64 // share normalizado φ atual por classe (estado EMA)
+	wfqBytes        [3]int64   // bytes acumulados na rodada atual (LOW=0, MED=1, HIGH=2)
+	wfqPhi          [3]float64 // share normalizado φ atual por classe (estado EMA)
+	wfqRoundDequeues int       // quantidade de dequeues na rodada atual
 
 	// controle de execução
 	mu      sync.Mutex
@@ -301,15 +302,25 @@ func (s *Scheduler) pickSP() task {
 	return task{}
 }
 
-// WFQ (weighted fair queuing): recalcula pesos dinâmicos a cada rounding, depois faz dequeue.
+// WFQ (weighted fair queuing): recalcula pesos dinâmicos por rodada.
+// Uma rodada fecha a cada 3 dequeues (P=3 classes).
 func (s *Scheduler) pickWFQ() task {
-	s.recalcWFQWeights() // Algoritmo 1 do paper — roda a cada rounding
 	entry := s.wfqSched.Dequeue()
 	if entry == nil {
 		return task{}
 	}
 	s.wfqCount--
-	return entry.UserData()
+	t := entry.UserData()
+
+	s.wfqRoundDequeues++
+	const wfqRoundSize = 3
+	if s.wfqRoundDequeues >= wfqRoundSize {
+		s.recalcWFQWeights()
+		s.wfqBytes = [3]int64{}
+		s.wfqRoundDequeues = 0
+	}
+
+	return t
 }
 
 // recalcWFQWeights implementa o Algoritmo 1 do paper para P=3 classes.
@@ -327,13 +338,13 @@ func (s *Scheduler) recalcWFQWeights() {
 	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda)
 	phiBase := [3]float64{1.0 / Wtotal, 2.0 / Wtotal, 3.0 / Wtotal}
 
-	// Passo 1: total de bytes acumulados
+// Passo 1: total de bytes acumulados na rodada
 	var total int64
 	for _, b := range s.wfqBytes {
 		total += b
 	}
 	if total == 0 {
-		return // sem tráfego ainda, manter pesos iniciais
+		return // sem tráfego na rodada, manter pesos atuais
 	}
 
 	// Passos 2–4: para cada classe p ∈ {LOW, MED, HIGH}
@@ -384,7 +395,7 @@ func (s *Scheduler) recalcWFQWeights() {
 		adapted)
 }
 
-// RecordWFQBytes acumula bytes enviados por classe para o recálculo dinâmico.
+// RecordWFQBytes acumula bytes enviados por classe para a rodada atual.
 // Implementa a interface WFQBytesRecorder.
 func (s *Scheduler) RecordWFQBytes(prio model.Priority, n int) {
 	if s.policy != PolicyWFQ {
