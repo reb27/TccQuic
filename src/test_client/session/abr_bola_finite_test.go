@@ -56,3 +56,27 @@ func TestBolaNoFOVDefaultsToLow(t *testing.T) {
 	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
 	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
 }
+
+func TestSelectABRControllerFixedMode(t *testing.T) {
+	abr := SelectABRController(Environment{ABRMode: "fixed"})
+	cfg := abr.SelectConfig(SegmentContext{})
+	require.Equal(t, "fixed_all_low", cfg.ID)
+	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
+}
+
+func TestSelectABRControllerArticleAlias(t *testing.T) {
+	abr := SelectABRController(Environment{ABRMode: "article"})
+	cfg := abr.SelectConfig(SegmentContext{})
+	require.Equal(t, "article50_all_low", cfg.ID)
+	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
+}
+
+func TestSelectABRControllerArticle30Mode(t *testing.T) {
+	abr := SelectABRController(Environment{ABRMode: "article30"})
+	cfg := abr.SelectConfig(SegmentContext{})
+	require.Equal(t, "article30_all_low", cfg.ID)
+	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
+}

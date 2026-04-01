@@ -56,9 +56,9 @@ type Scheduler struct {
 	wfqCount int // contagem de itens no WFQ (para totalQueuedLocked)
 
 	// Pesos dinâmicos WFQ (Algoritmo 1 do paper)
-	wfqBytes        [3]int64   // bytes acumulados na rodada atual (LOW=0, MED=1, HIGH=2)
-	wfqPhi          [3]float64 // share normalizado φ atual por classe (estado EMA)
-	wfqRoundDequeues int       // quantidade de dequeues na rodada atual
+	wfqBytes         [3]int64   // bytes acumulados na rodada atual (LOW=0, MED=1, HIGH=2)
+	wfqPhi           [3]float64 // share normalizado φ atual por classe (estado EMA)
+	wfqRoundDequeues int        // quantidade de dequeues na rodada atual
 
 	// controle de execução
 	mu      sync.Mutex
@@ -291,13 +291,20 @@ func (s *Scheduler) pickFIFO() task {
 
 // SP (strict priority, não-preemptivo): sempre escolhe a maior prioridade disponível.
 func (s *Scheduler) pickSP() task {
-	// high → medium → low
-	for q := int(model.HIGH_PRIORITY); q >= int(model.LOW_PRIORITY); q-- {
-		if len(s.queues[q]) > 0 {
-			t := s.queues[q][0]
-			s.queues[q] = s.queues[q][1:]
-			return t
+	// high → medium → low (ordem explícita, independente dos valores numéricos do enum)
+	order := [...]model.Priority{
+		model.HIGH_PRIORITY,
+		model.MEDIUM_PRIORITY,
+		model.LOW_PRIORITY,
+	}
+	for _, prio := range order {
+		q := int(prio)
+		if len(s.queues[q]) == 0 {
+			continue
 		}
+		t := s.queues[q][0]
+		s.queues[q] = s.queues[q][1:]
+		return t
 	}
 	return task{}
 }
@@ -338,7 +345,7 @@ func (s *Scheduler) recalcWFQWeights() {
 	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda)
 	phiBase := [3]float64{1.0 / Wtotal, 2.0 / Wtotal, 3.0 / Wtotal}
 
-// Passo 1: total de bytes acumulados na rodada
+	// Passo 1: total de bytes acumulados na rodada
 	var total int64
 	for _, b := range s.wfqBytes {
 		total += b

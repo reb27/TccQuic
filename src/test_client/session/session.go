@@ -31,6 +31,7 @@ type Environment struct {
 	FOVTraceFPS          int
 	StatisticsPath       string
 	SummaryPath          string
+	ABRDecisionsPath     string
 	FOVDeliveryPath      string
 	FOVGoodputPath       string
 	DeadlineLatenessPath string
@@ -43,6 +44,7 @@ type TestSession struct {
 	opts          Options
 	statsLogger   *metrics.StatisticsLogger
 	summaryLogger *metrics.SummaryLogger
+	abrLogger     *ABRDecisionLogger
 	playback      *PlaybackSimulator
 	metrics       *metrics.Session
 	collector     *netstats.StatsCollector
@@ -57,6 +59,7 @@ type TestSession struct {
 func NewTestSession(client RequestSender, env Environment, opts Options) *TestSession {
 	statsLogger := metrics.NewStatisticsLogger(env.StatisticsPath)
 	summaryLogger := metrics.NewSummaryLogger(env.SummaryPath)
+	abrLogger := NewABRDecisionLogger(env.ABRDecisionsPath)
 	playback := NewPlaybackSimulator(opts.SegmentDuration, opts.BaseLatency, opts.FirstSegment, opts.LastSegment)
 	metricSet := metrics.NewSession(opts.SegmentDuration)
 	collector := netstats.New(opts.LastSegment - opts.FirstSegment + 1)
@@ -69,6 +72,7 @@ func NewTestSession(client RequestSender, env Environment, opts Options) *TestSe
 		opts:          opts,
 		statsLogger:   statsLogger,
 		summaryLogger: summaryLogger,
+		abrLogger:     abrLogger,
 		playback:      playback,
 		metrics:       metricSet,
 		collector:     collector,
@@ -83,13 +87,14 @@ func NewTestSession(client RequestSender, env Environment, opts Options) *TestSe
 func (s *TestSession) Run() error {
 	defer s.statsLogger.Close()
 	defer s.summaryLogger.Close()
+	defer s.abrLogger.Close()
 	s.playback.Start()
 	if err := s.loadFOVTrace(); err != nil {
 		log.Printf("Failed to load FOV trace from %s: %v (continuing without FOV prioritisation)", s.env.FOVTracePath, err)
 	}
 
 	startTime := time.Now()
-	scheduler := NewTileScheduler(s.client, s.playback, s.collector, s.metrics, s.statsLogger, s.semaphore, startTime, &s.lastDownloadedSegment)
+	scheduler := NewTileScheduler(s.client, s.playback, s.collector, s.metrics, s.statsLogger, s.semaphore, startTime, &s.lastDownloadedSegment, s.env.ABRMode)
 	log.Printf("Starting test iteration for segments %d to %d (tiles %d to %d)", s.opts.FirstSegment, s.opts.LastSegment, s.opts.FirstTile, s.opts.LastTile)
 	fmt.Printf("Test started with parallelism = %d\n", s.opts.Parallelism)
 
@@ -124,7 +129,9 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 	s.metrics.DeadlineLateness.SetRequired(segmentID, s.tileUniverse)
 
 	var fovTiles []int
-	if s.fovTrace != nil {
+	if tiles, ok := priorityTilesForABRMode(s.env.ABRMode, segmentID, s.opts.FirstTile, s.opts.LastTile); ok {
+		fovTiles = tiles
+	} else if s.fovTrace != nil {
 		fovTiles = filterTilesInRange(s.fovTrace.TilesForSegment(segmentID), s.opts.FirstTile, s.opts.LastTile)
 	}
 	s.metrics.FOVTiles.SetRequired(segmentID, fovTiles)
@@ -142,6 +149,9 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 	}
 	cfg := s.abr.SelectConfig(ctx)
 	log.Printf("ABR: cfg=%s fov_bitrate=%d nonfov_bitrate=%d avg_tp=%.2f buffer=%.2f s", cfg.ID, cfg.FOVBitrate, cfg.NonFOVBitrate, avgThroughput, bufferLevel.Seconds())
+	if s.abrLogger != nil {
+		s.abrLogger.Log(segmentID, cfg, ctx)
+	}
 	scheduler.ScheduleSegment(segmentID, segmentDeadline, cfg, s.opts.FirstTile, s.opts.LastTile, s.fovTrace)
 }
 

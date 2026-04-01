@@ -5,7 +5,10 @@ showUsage() {
     echo "Usage: $PROGRAM_NAME [OPTIONS] <IP>"
     echo "OPTIONS:"
     echo "--fifo, --sp, --wfq     Select server mode (default: fifo)"
-    echo "--abr MODE              Select client ABR mode (bola|legacy)"
+    echo "--abr MODE              Select client ABR mode (bola|legacy|fixed|article|article50|article30)"
+    echo "--article50             Alias for --abr article50 (modo artigo com 50% alta prioridade)"
+    echo "--article30             Alias for --abr article30 (modo artigo com 30% alta prioridade)"
+    echo "--scenario N            Apply article scenario preset (1, 3, or 6)"
     echo "--sbw N                 Select server bandwidth in Mbps"
     echo "--cbw N                 Select client bandwidth in Mbps"
     echo "--baselatency N         Select client base latency"
@@ -17,38 +20,77 @@ showUsage() {
     echo "-o DIR                  Select output directory"
 }
 
-SERVER_MODE="fifo"
+SERVER_MODE="wfq"
 ABR_MODE="bola"
-SERVER_BW="10"
-CLIENT_BW="100"
-LOSS="10"
-PARALELLISM="128"
-DELAY="40"
-LOAD="70"
+SERVER_BW="60"
+CLIENT_BW="50"
+LOSS="4"
+PARALELLISM="120"
+DELAY="20"
+LOAD="30"
 BASE_LATENCY="800"
 FOV_MODE="normal"
+SCENARIO=
 IP=
 LOG_DIR=
+SET_ABR=0
+SET_SBW=0
+SET_CBW=0
+SET_LOSS=0
+SET_PAR=0
+SET_DELAY=0
+SET_LOAD=0
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
     --fifo) SERVER_MODE="fifo"              ; shift   ;;
     --sp)   SERVER_MODE="sp"                ; shift   ;;
     --wfq)  SERVER_MODE="wfq"               ; shift   ;;
-    --abr)  ABR_MODE="$2"                   ; shift 2 ;;
-    --sbw)  SERVER_BW="$2"                  ; shift 2 ;;
-    --cbw)  CLIENT_BW="$2"                  ; shift 2 ;;
+    --abr)  ABR_MODE="$2"                   ; SET_ABR=1 ; shift 2 ;;
+    --article50) ABR_MODE="article50"       ; SET_ABR=1 ; shift   ;;
+    --article30) ABR_MODE="article30"       ; SET_ABR=1 ; shift   ;;
+    --scenario) SCENARIO="$2"               ; shift 2 ;;
+    --sbw)  SERVER_BW="$2"                  ; SET_SBW=1 ; shift 2 ;;
+    --cbw)  CLIENT_BW="$2"                  ; SET_CBW=1 ; shift 2 ;;
     --baselatency)  BASE_LATENCY="$2"       ; shift 2 ;;
-    --loss) LOSS="$2"                       ; shift 2 ;;
-    -p)     PARALELLISM="$2"                ; shift 2 ;;
-    --delay) DELAY="$2"                     ; shift 2 ;;
-    --load) LOAD="$2"                       ; shift 2 ;;
+    --loss) LOSS="$2"                       ; SET_LOSS=1 ; shift 2 ;;
+    -p)     PARALELLISM="$2"                ; SET_PAR=1 ; shift 2 ;;
+    --delay) DELAY="$2"                     ; SET_DELAY=1 ; shift 2 ;;
+    --load) LOAD="$2"                       ; SET_LOAD=1 ; shift 2 ;;
     --fov)   FOV_MODE="$2"                  ; shift 2 ;;
     -o)     LOG_DIR="$2"                    ; shift 2 ;;
     -*)     showUsage ; exit 1              ; shift   ;;
     *)      IP="$1"                         ; shift   ;;
     esac
 done
+
+if [[ -n "$SCENARIO" ]]; then
+    case "$SCENARIO" in
+        1)
+            [[ $SET_DELAY -eq 0 ]] && DELAY="24"
+            [[ $SET_LOAD -eq 0 ]] && LOAD="10"
+            ;;
+        3)
+            [[ $SET_DELAY -eq 0 ]] && DELAY="16"
+            [[ $SET_LOAD -eq 0 ]] && LOAD="10"
+            ;;
+        6)
+            [[ $SET_DELAY -eq 0 ]] && DELAY="10"
+            [[ $SET_LOAD -eq 0 ]] && LOAD="30"
+            ;;
+        *)
+            echo "Scenario inválido: $SCENARIO (use 1, 3 ou 6)"
+            exit 1
+            ;;
+    esac
+    [[ $SET_SBW -eq 0 ]] && SERVER_BW="100"
+    [[ $SET_CBW -eq 0 ]] && CLIENT_BW="100"
+    [[ $SET_LOSS -eq 0 ]] && LOSS="2"
+    [[ $SET_PAR -eq 0 ]] && PARALELLISM="120"
+    if [[ $SET_ABR -eq 0 ]]; then
+        ABR_MODE="article50"
+    fi
+fi
 
 if [[ -z $IP ]]; then
     showUsage
@@ -157,6 +199,7 @@ if [[ ! -f "$LOG_DIR/experiment.env" ]]; then
     : > "$LOG_DIR/experiment.env"
 fi
 cat >> "$LOG_DIR/experiment.env" <<EOF
+scenario=${SCENARIO}
 server_mode=$SERVER_MODE
 abr_mode=$ABR_MODE
 server_bw_mbps=$SERVER_BW
@@ -173,9 +216,9 @@ withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' ABR_MODE='$ABR_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
-            FOV_TRACE_PATH='$FOV_TRACE_PATH' \
+            FOV_TRACE_PATH='$FOV_TRACE_PATH' LANG='C.UTF-8' LC_ALL='C.UTF-8' PYTHONIOENCODING='UTF-8' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
-EXIT_CODE=$?
+EXIT_CODE=${PIPESTATUS[0]}
 echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
 
 download "$REMOTE_DIR/*.csv" "$LOG_DIR"

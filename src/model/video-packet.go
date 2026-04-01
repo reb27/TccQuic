@@ -203,7 +203,7 @@ func ReadVideoPacketResponse(reader *bufio.Reader) (res *VideoPacketResponse, er
 func EstimateTileSize(req *VideoPacketRequest) int64 {
 	basePath, _ := os.Getwd()
 	full := fmt.Sprintf("%s/data/segments/video_tiled_10_dash_track%d_%d.m4s",
-		basePath, req.Segment, req.Tile)
+		basePath, req.Tile, req.Segment)
 	st, err := os.Stat(full)
 	if err != nil {
 		return 200000 // Fallback se arquivo não existir

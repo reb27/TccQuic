@@ -23,6 +23,7 @@ type TileScheduler struct {
 	collector             *netstats.StatsCollector
 	metrics               *metrics.Session
 	statsLogger           *metrics.StatisticsLogger
+	abrMode               string
 	startTime             time.Time
 	firstRequestOnce      sync.Once
 	firstRequestTime      time.Time
@@ -31,13 +32,14 @@ type TileScheduler struct {
 	wg                    sync.WaitGroup
 }
 
-func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collector *netstats.StatsCollector, metrics *metrics.Session, statsLogger *metrics.StatisticsLogger, sem Semaphore, startTime time.Time, lastDownloadedSegment *atomic.Int32) *TileScheduler {
+func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collector *netstats.StatsCollector, metrics *metrics.Session, statsLogger *metrics.StatisticsLogger, sem Semaphore, startTime time.Time, lastDownloadedSegment *atomic.Int32, abrMode string) *TileScheduler {
 	return &TileScheduler{
 		client:                client,
 		playback:              playback,
 		collector:             collector,
 		metrics:               metrics,
 		statsLogger:           statsLogger,
+		abrMode:               abrMode,
 		startTime:             startTime,
 		lastDownloadedSegment: lastDownloadedSegment,
 		sem:                   sem,
@@ -46,7 +48,12 @@ func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collect
 
 func (s *TileScheduler) ScheduleSegment(segmentID int, deadline time.Time, cfg SegmentConfig, firstTile, lastTile int, fovTrace *fov.FOVTrace) {
 	for tileID := firstTile; tileID <= lastTile; tileID++ {
-		inFOV := fovTrace != nil && fovTrace.Contains(segmentID, tileID)
+		inFOV := false
+		if high, ok := isHighPriorityForABRMode(s.abrMode, segmentID, tileID); ok {
+			inFOV = high
+		} else if fovTrace != nil && fovTrace.Contains(segmentID, tileID) {
+			inFOV = true
+		}
 		priority := model.LOW_PRIORITY
 		if inFOV {
 			priority = model.HIGH_PRIORITY

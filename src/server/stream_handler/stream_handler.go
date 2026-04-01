@@ -408,7 +408,7 @@ func readFile(req *model.VideoPacketRequest) []byte {
 		log.Printf("[FS] getwd err: %v", err)
 	}
 	filePath := fmt.Sprintf("/data/segments/video_tiled_10_dash_track%d_%d.m4s",
-		req.Segment, req.Tile)
+		req.Tile, req.Segment)
 	full := basePath + filePath
 	data, err := os.ReadFile(full)
 	if err != nil {

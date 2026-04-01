@@ -28,6 +28,7 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		FOVTraceFPS:          envCfg.FOVTraceFPS,
 		StatisticsPath:       envCfg.StatisticsPath,
 		SummaryPath:          envCfg.SummaryPath,
+		ABRDecisionsPath:     envCfg.ABRDecisionsPath,
 		FOVDeliveryPath:      envCfg.FOVDeliveryPath,
 		FOVGoodputPath:       envCfg.FOVGoodputPath,
 		DeadlineLatenessPath: envCfg.DeadlineLatenessPath,

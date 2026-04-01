@@ -147,5 +147,71 @@ O servidor mantém um **rastreador de banda** (`bandwidth/tracker.go`) com janel
 |---------|----------|
 | `statistics-<pid>.csv` | Detalhes por requisição |
 | `statistics-summary-<pid>.csv` | Resumo (join latency, completion rate, stale bytes) |
+| `abr-decisions-<pid>.csv` | Decisões do ABR por segmento (configuração, bitrate, throughput, buffer) |
 | `fov-delivery-<pid>.csv` | Taxa de entrega FoV por segmento |
 | `fov-goodput-<pid>.csv` | Goodput útil (FoV on-time) por janela |
+
+---
+
+## Validação dos ABRs `bola` e `legacy`
+
+Para validar os dois ABRs do cliente no simulador Mininet, o projeto agora grava um CSV adicional com as decisões do algoritmo:
+
+- `abr-decisions-<pid>.csv`
+
+Esse arquivo registra, por segmento:
+
+- `cfg_id`
+- `fov_bitrate`
+- `nonfov_bitrate`
+- `avg_throughput_Bps`
+- `buffer_level_s`
+- `time_budget_s`
+
+### Execução recomendada
+
+```bash
+cd scripts/mininet
+./run_abr_validation.sh <IP_DO_MININET>
+```
+
+O script executa quatro casos:
+
+- `bola_sanity`
+- `legacy_sanity`
+- `bola_constrained`
+- `legacy_constrained`
+
+### Entradas recomendadas para validação
+
+Caso de sanidade:
+
+- `--wfq --sbw 100 --cbw 100 --loss 0 --delay 5 --load 0 --baselatency 120 -p 120`
+
+Caso restrito:
+
+- `--wfq --sbw 60 --cbw 50 --loss 4 --delay 20 --load 30 --baselatency 800 -p 120`
+
+### Saídas esperadas
+
+No `statistics-summary-<pid>.csv` para o caso de sanidade:
+
+- `segment_completion_rate_percent >= 95`
+- `stale_bytes_ratio_percent <= 5`
+- `deadline_miss_rate_fov_percent <= 5`
+- `deadline_miss_rate_nonfov_percent <= 5`
+- `fov_hit_rate_delivery_percent >= 95`
+- `timely_bytes_ratio_percent >= 95`
+
+No `abr-decisions-<pid>.csv`:
+
+- para `bola`, `cfg_id` deve ser apenas `A_all_low`, `B_fov_med` ou `C_fov_high`
+- para `bola`, `nonfov_bitrate` deve permanecer `3`
+- para `legacy`, `cfg_id` deve ser `default`
+- para `legacy`, `fov_bitrate` deve estar em `{3, 5, 10}` e `nonfov_bitrate` deve ser `3`
+
+Validação manual de um diretório específico:
+
+```bash
+python3 scripts/mininet/resources/validate_abr_metrics.py logs/server_scheduler_test/...
+```

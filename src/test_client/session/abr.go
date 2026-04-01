@@ -39,6 +39,10 @@ type bufferAwareABR struct {
 	bitrates []BitrateInfo
 }
 
+type fixedABR struct {
+	config SegmentConfig
+}
+
 const (
 	minBufferLevel = 2 * time.Second
 	maxBufferLevel = 10 * time.Second
@@ -54,9 +58,29 @@ func NewDefaultABRController() ABRController {
 	}
 }
 
+func NewFixedABRController() ABRController {
+	return NewFixedABRControllerWithID("fixed_all_low")
+}
+
+func NewFixedABRControllerWithID(id string) ABRController {
+	return &fixedABR{
+		config: SegmentConfig{
+			ID:            id,
+			FOVBitrate:    model.LOW_BITRATE,
+			NonFOVBitrate: model.LOW_BITRATE,
+		},
+	}
+}
+
 func SelectABRController(env Environment) ABRController {
 	mode := strings.ToLower(strings.TrimSpace(env.ABRMode))
 	switch mode {
+	case "fixed":
+		return NewFixedABRController()
+	case "article", "article50":
+		return NewFixedABRControllerWithID("article50_all_low")
+	case "article30":
+		return NewFixedABRControllerWithID("article30_all_low")
 	case "", "bola", "bola_finite", "bolafinite":
 		return NewBOLAFiniteABR()
 	case "default", "legacy", "threshold":
@@ -65,6 +89,10 @@ func SelectABRController(env Environment) ABRController {
 		log.Printf("Unknown ABR_MODE=%q, defaulting to BOLA", env.ABRMode)
 		return NewBOLAFiniteABR()
 	}
+}
+
+func (c *fixedABR) SelectConfig(ctx SegmentContext) SegmentConfig {
+	return c.config
 }
 
 func (c *bufferAwareABR) SelectConfig(ctx SegmentContext) SegmentConfig {
