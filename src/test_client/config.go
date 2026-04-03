@@ -15,15 +15,16 @@ const (
 )
 
 type EnvironmentConfig struct {
-	Pipeline             bool
-	FOVTracePath         string
-	FOVTraceFPS          int
-	StatisticsPath       string
-	SummaryPath          string
-	FOVDeliveryPath      string
-	FOVGoodputPath       string
-	DeadlineLatenessPath string
-	ABRMode              string
+	Pipeline                     bool
+	FOVTracePath                 string
+	FOVTraceFPS                  int
+	StatisticsPath               string
+	SummaryPath                  string
+	FOVDeliveryPath              string
+	FOVGoodputPath               string
+	DeadlineLatenessPath         string
+	ClientQUICUplinkLossRatePath string
+	ABRMode                      string
 }
 
 func ResolveEnvironmentConfig() EnvironmentConfig {
@@ -40,6 +41,7 @@ func ResolveEnvironmentConfig() EnvironmentConfig {
 	cfg.FOVDeliveryPath = fmt.Sprintf("fov-delivery-%d.csv", pid)
 	cfg.FOVGoodputPath = fmt.Sprintf("fov-goodput-%d.csv", pid)
 	cfg.DeadlineLatenessPath = fmt.Sprintf("deadline-lateness-%d.csv", pid)
+	cfg.ClientQUICUplinkLossRatePath = fmt.Sprintf("client-quic-uplink-loss-rate-%d.csv", pid)
 
 	return cfg
 }

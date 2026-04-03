@@ -24,14 +24,15 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 	}
 
 	env := session.Environment{
-		FOVTracePath:         envCfg.FOVTracePath,
-		FOVTraceFPS:          envCfg.FOVTraceFPS,
-		StatisticsPath:       envCfg.StatisticsPath,
-		SummaryPath:          envCfg.SummaryPath,
-		FOVDeliveryPath:      envCfg.FOVDeliveryPath,
-		FOVGoodputPath:       envCfg.FOVGoodputPath,
-		DeadlineLatenessPath: envCfg.DeadlineLatenessPath,
-		ABRMode:              envCfg.ABRMode,
+		FOVTracePath:                 envCfg.FOVTracePath,
+		FOVTraceFPS:                  envCfg.FOVTraceFPS,
+		StatisticsPath:               envCfg.StatisticsPath,
+		SummaryPath:                  envCfg.SummaryPath,
+		FOVDeliveryPath:              envCfg.FOVDeliveryPath,
+		FOVGoodputPath:               envCfg.FOVGoodputPath,
+		DeadlineLatenessPath:         envCfg.DeadlineLatenessPath,
+		ClientQUICUplinkLossRatePath: envCfg.ClientQUICUplinkLossRatePath,
+		ABRMode:                      envCfg.ABRMode,
 	}
 
 	opts := session.Options{

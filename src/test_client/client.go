@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"main/src/model"
+	"main/src/test_client/metrics"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ type Client struct {
 	waitingResponses      map[requestId]chan *model.VideoPacketResponse
 	waitingResponsesMutex sync.Mutex
 	replayBuffer          *ReplayBuffer // Adicionado o replay buffer aqui
+	quicLossCollector     *clientQUICUplinkLossCollector
 }
 
 type ReplayBuffer struct {
@@ -48,9 +50,10 @@ type ReplayBuffer struct {
 
 func NewClient(options ClientOptions) *Client {
 	return &Client{
-		Options:          options,
-		waitingResponses: make(map[requestId]chan *model.VideoPacketResponse),
-		replayBuffer:     NewReplayBuffer(), // Inicializa o replay buffer
+		Options:           options,
+		waitingResponses:  make(map[requestId]chan *model.VideoPacketResponse),
+		replayBuffer:      NewReplayBuffer(), // Inicializa o replay buffer
+		quicLossCollector: newClientQUICUplinkLossCollector(metrics.NewClientQUICUplinkLossRateAgg(time.Second)),
 	}
 }
 
@@ -86,6 +89,7 @@ func (c *Client) Connect() (err error) {
 		HandshakeIdleTimeout:  100 * time.Second, // Set the receive connection flow control window size to 20 MB
 		MaxIncomingStreams:    20000,             // Set the maximum number of incoming streams
 		MaxIncomingUniStreams: 20000,             // Set the maximum number of incoming unidirectional streams
+		Tracer:                c.quicLossCollector,
 	}
 
 	// Create new QUIC connection
@@ -97,6 +101,7 @@ func (c *Client) Connect() (err error) {
 	}
 
 	log.Println("Connected")
+	c.quicLossCollector.StartDataPhase()
 
 	if c.Options.Pipeline {
 		c.pipelineStream, err = c.openStream()
@@ -106,6 +111,14 @@ func (c *Client) Connect() (err error) {
 	}
 
 	return
+}
+
+func (c *Client) ClientQUICUplinkLossSnapshot() (float64, uint64, uint64, []metrics.ClientQUICUplinkLossRateSample) {
+	if c.quicLossCollector == nil || c.quicLossCollector.agg == nil {
+		return 0, 0, 0, nil
+	}
+	lost, acked := c.quicLossCollector.agg.Totals()
+	return c.quicLossCollector.agg.OverallPercent(), lost, acked, c.quicLossCollector.agg.Series()
 }
 
 // Send a request

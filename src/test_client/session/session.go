@@ -14,6 +14,7 @@ import (
 
 type RequestSender interface {
 	Request(model.VideoPacketRequest, time.Duration) *model.VideoPacketResponse
+	ClientQUICUplinkLossSnapshot() (float64, uint64, uint64, []metrics.ClientQUICUplinkLossRateSample)
 }
 
 type Options struct {
@@ -27,14 +28,15 @@ type Options struct {
 }
 
 type Environment struct {
-	FOVTracePath         string
-	FOVTraceFPS          int
-	StatisticsPath       string
-	SummaryPath          string
-	FOVDeliveryPath      string
-	FOVGoodputPath       string
-	DeadlineLatenessPath string
-	ABRMode              string
+	FOVTracePath                 string
+	FOVTraceFPS                  int
+	StatisticsPath               string
+	SummaryPath                  string
+	FOVDeliveryPath              string
+	FOVGoodputPath               string
+	DeadlineLatenessPath         string
+	ClientQUICUplinkLossRatePath string
+	ABRMode                      string
 }
 
 type TestSession struct {
@@ -168,9 +170,10 @@ func (s *TestSession) finalize(startTime time.Time, firstRequestTime time.Time) 
 	fovMissRate, nonFOVMissRate := s.metrics.Deadlines.Rates()
 	fovHitRate := s.metrics.FOVHit.RateOverall()
 	fovGoodputRate := s.metrics.FOVGoodput.OverallKbps(elapsed)
+	clientQUICUplinkLossRate, clientQUICUplinkLostPackets, clientQUICUplinkAckedPackets, clientQUICUplinkLossSeries := s.client.ClientQUICUplinkLossSnapshot()
 
 	if s.summaryLogger != nil {
-		s.summaryLogger.LogSession(joinLatency, completionRate, fovCompletionRate, staleRatio, fovMissRate, nonFOVMissRate, fovHitRate, fovGoodputRate, timelyRatio)
+		s.summaryLogger.LogSession(joinLatency, completionRate, fovCompletionRate, staleRatio, fovMissRate, nonFOVMissRate, fovHitRate, fovGoodputRate, timelyRatio, clientQUICUplinkLossRate, clientQUICUplinkLostPackets, clientQUICUplinkAckedPackets)
 	}
 	if s.env.FOVDeliveryPath != "" {
 		metrics.WriteFOVDeliverySeries(s.env.FOVDeliveryPath, s.metrics.FOVHit.Series(s.opts.FirstSegment, s.opts.LastSegment))
@@ -180,6 +183,9 @@ func (s *TestSession) finalize(startTime time.Time, firstRequestTime time.Time) 
 	}
 	if s.env.DeadlineLatenessPath != "" {
 		metrics.WriteDeadlineLatenessSeries(s.env.DeadlineLatenessPath, s.metrics.DeadlineLateness.Series(s.opts.FirstSegment, s.opts.LastSegment))
+	}
+	if s.env.ClientQUICUplinkLossRatePath != "" {
+		metrics.WriteClientQUICUplinkLossRateSeries(s.env.ClientQUICUplinkLossRatePath, clientQUICUplinkLossSeries)
 	}
 }
 

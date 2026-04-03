@@ -55,7 +55,7 @@ type SummaryLogger struct {
 }
 
 func NewSummaryLogger(path string) *SummaryLogger {
-	const header = "join_latency_ms,segment_completion_rate_percent,segment_completion_rate_fov_percent,stale_bytes_ratio_percent,deadline_miss_rate_fov_percent,deadline_miss_rate_nonfov_percent,fov_hit_rate_delivery_percent,useful_goodput_fov_kbps,timely_bytes_ratio_percent\n"
+	const header = "join_latency_ms,segment_completion_rate_percent,segment_completion_rate_fov_percent,stale_bytes_ratio_percent,deadline_miss_rate_fov_percent,deadline_miss_rate_nonfov_percent,fov_hit_rate_delivery_percent,useful_goodput_fov_kbps,timely_bytes_ratio_percent,client_quic_uplink_loss_rate_percent,client_quic_uplink_lost_packets,client_quic_uplink_acked_packets\n"
 	file, err := os.Create(path)
 	if err != nil {
 		log.Panicf("Failed to open %s: %s\n", path, err)
@@ -67,10 +67,10 @@ func NewSummaryLogger(path string) *SummaryLogger {
 	return &SummaryLogger{fileWriter: fileWriter, file: file}
 }
 
-func (s *SummaryLogger) LogSession(joinLatency time.Duration, segmentCompletionRatePercent float64, fovCompletionRatePercent float64, staleBytesRatioPercent float64, deadlineMissRateFOV float64, deadlineMissRateNonFOV float64, fovHitRate float64, usefulGoodputKbps float64, timelyBytesRatioPercent float64) {
+func (s *SummaryLogger) LogSession(joinLatency time.Duration, segmentCompletionRatePercent float64, fovCompletionRatePercent float64, staleBytesRatioPercent float64, deadlineMissRateFOV float64, deadlineMissRateNonFOV float64, fovHitRate float64, usefulGoodputKbps float64, timelyBytesRatioPercent float64, clientQUICUplinkLossRatePercent float64, clientQUICUplinkLostPackets uint64, clientQUICUplinkAckedPackets uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	row := fmt.Sprintf("%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n", joinLatency.Milliseconds(), segmentCompletionRatePercent, fovCompletionRatePercent, staleBytesRatioPercent, deadlineMissRateFOV, deadlineMissRateNonFOV, fovHitRate, usefulGoodputKbps, timelyBytesRatioPercent)
+	row := fmt.Sprintf("%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d\n", joinLatency.Milliseconds(), segmentCompletionRatePercent, fovCompletionRatePercent, staleBytesRatioPercent, deadlineMissRateFOV, deadlineMissRateNonFOV, fovHitRate, usefulGoodputKbps, timelyBytesRatioPercent, clientQUICUplinkLossRatePercent, clientQUICUplinkLostPackets, clientQUICUplinkAckedPackets)
 	if _, err := s.fileWriter.WriteString(row); err != nil {
 		log.Panicf("Failed to write: %s\n", err)
 	}
@@ -215,6 +215,137 @@ type fovGoodputSample struct {
 	Bytes       uint64
 	Kbps        float64
 }
+
+type ClientQUICUplinkLossRateSample struct {
+	WindowStart  time.Duration
+	WindowEnd    time.Duration
+	LostPackets  uint64
+	AckedPackets uint64
+	Percent      float64
+}
+
+type clientQUICUplinkLossRateBucket struct {
+	lost  uint64
+	acked uint64
+}
+
+type ClientQUICUplinkLossRateAgg struct {
+	mutex      sync.Mutex
+	window     time.Duration
+	startTime  time.Time
+	active     bool
+	totalLost  uint64
+	totalAcked uint64
+	buckets    map[int64]clientQUICUplinkLossRateBucket
+	now        func() time.Time
+}
+
+func NewClientQUICUplinkLossRateAgg(window time.Duration) *ClientQUICUplinkLossRateAgg {
+	if window <= 0 {
+		window = time.Second
+	}
+	return &ClientQUICUplinkLossRateAgg{
+		window:  window,
+		buckets: make(map[int64]clientQUICUplinkLossRateBucket),
+		now:     time.Now,
+	}
+}
+
+func (a *ClientQUICUplinkLossRateAgg) StartDataPhase(start time.Time) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if start.IsZero() {
+		start = a.now()
+	}
+	a.startTime = start
+	a.active = true
+}
+
+func (a *ClientQUICUplinkLossRateAgg) AddLost(at time.Time) {
+	a.add(at, true)
+}
+
+func (a *ClientQUICUplinkLossRateAgg) AddAcked(at time.Time) {
+	a.add(at, false)
+}
+
+func (a *ClientQUICUplinkLossRateAgg) add(at time.Time, lost bool) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if !a.active {
+		return
+	}
+	if at.IsZero() {
+		at = a.now()
+	}
+	if a.startTime.IsZero() {
+		a.startTime = at
+	}
+	if at.Before(a.startTime) {
+		return
+	}
+	bucketIdx := int64(0)
+	if a.window > 0 {
+		bucketIdx = int64(at.Sub(a.startTime) / a.window)
+	}
+	bucket := a.buckets[bucketIdx]
+	if lost {
+		a.totalLost++
+		bucket.lost++
+	} else {
+		a.totalAcked++
+		bucket.acked++
+	}
+	a.buckets[bucketIdx] = bucket
+}
+
+func (a *ClientQUICUplinkLossRateAgg) OverallPercent() float64 {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	return lossRatePercent(a.totalLost, a.totalAcked)
+}
+
+func (a *ClientQUICUplinkLossRateAgg) Totals() (uint64, uint64) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	return a.totalLost, a.totalAcked
+}
+
+func (a *ClientQUICUplinkLossRateAgg) Series() []ClientQUICUplinkLossRateSample {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	if len(a.buckets) == 0 {
+		return nil
+	}
+	keys := make([]int64, 0, len(a.buckets))
+	for k := range a.buckets {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	samples := make([]ClientQUICUplinkLossRateSample, 0, len(keys))
+	for _, bucketIdx := range keys {
+		bucket := a.buckets[bucketIdx]
+		start := time.Duration(bucketIdx) * a.window
+		end := start + a.window
+		samples = append(samples, ClientQUICUplinkLossRateSample{
+			WindowStart:  start,
+			WindowEnd:    end,
+			LostPackets:  bucket.lost,
+			AckedPackets: bucket.acked,
+			Percent:      lossRatePercent(bucket.lost, bucket.acked),
+		})
+	}
+	return samples
+}
+
+func lossRatePercent(lost uint64, acked uint64) float64 {
+	resolved := lost + acked
+	if resolved == 0 {
+		return 0
+	}
+	return 100.0 * float64(lost) / float64(resolved)
+}
+
 type fovGoodputAgg struct {
 	mutex      sync.Mutex
 	window     time.Duration
@@ -333,9 +464,9 @@ func (a *segmentCompletionAgg) Rate(firstSegment, lastSegment int) float64 {
 }
 
 type deadlineLatenessSample struct {
-	Segment       int
-	Tile          int
-	LatenessMs    float64
+	Segment        int
+	Tile           int
+	LatenessMs     float64
 	MissedDeadline bool
 }
 type deadlineLatenessAgg struct {
@@ -452,5 +583,23 @@ func WriteDeadlineLatenessSeries(path string, samples []deadlineLatenessSample) 
 	writer.WriteString("segment,tile,lateness_ms,missed_deadline\n")
 	for _, s := range samples {
 		fmt.Fprintf(writer, "%d,%d,%.3f,%t\n", s.Segment, s.Tile, s.LatenessMs, s.MissedDeadline)
+	}
+}
+
+func WriteClientQUICUplinkLossRateSeries(path string, samples []ClientQUICUplinkLossRateSample) {
+	if path == "" {
+		return
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		log.Printf("Failed to create %s: %v", path, err)
+		return
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+	writer.WriteString("window_start_s,window_end_s,lost_packets,acked_packets,client_quic_uplink_loss_rate_percent\n")
+	for _, s := range samples {
+		fmt.Fprintf(writer, "%.3f,%.3f,%d,%d,%.2f\n", s.WindowStart.Seconds(), s.WindowEnd.Seconds(), s.LostPackets, s.AckedPackets, s.Percent)
 	}
 }
