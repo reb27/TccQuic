@@ -17,15 +17,15 @@ showUsage() {
     echo "-o DIR                  Select output directory"
 }
 
-SERVER_MODE="fifo"
+SERVER_MODE="wfq"
 ABR_MODE="bola"
-SERVER_BW="10"
-CLIENT_BW="100"
+SERVER_BW="60"
+CLIENT_BW="60"
 LOSS="10"
-PARALELLISM="128"
-DELAY="40"
-LOAD="70"
-BASE_LATENCY="800"
+PARALELLISM="120"
+DELAY="2"
+LOAD="10"
+BASE_LATENCY="700"
 FOV_MODE="normal"
 IP=
 LOG_DIR=
