@@ -136,3 +136,28 @@ func (t *FOVTrace) MaxSegment() int {
 	}
 	return t.maxSegment
 }
+
+// NearFoV returns true if tileID is NOT in the FoV but is within `margin`
+// tile-IDs of any FoV tile for the given segment.
+func (t *FOVTrace) NearFoV(segment, tileID, margin int) bool {
+	if t == nil || margin <= 0 {
+		return false
+	}
+	fovSet := t.tilesBySegment[segment]
+	if len(fovSet) == 0 {
+		return false
+	}
+	if _, inFoV := fovSet[tileID]; inFoV {
+		return false
+	}
+	for fovTile := range fovSet {
+		diff := tileID - fovTile
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff <= margin {
+			return true
+		}
+	}
+	return false
+}

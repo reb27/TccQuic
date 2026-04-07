@@ -290,9 +290,9 @@ func (s *Scheduler) pickFIFO() task {
 }
 
 // SP (strict priority, não-preemptivo): sempre escolhe a maior prioridade disponível.
+// HIGH_PRIORITY=0, MEDIUM_PRIORITY=1, LOW_PRIORITY=2 (iota order).
 func (s *Scheduler) pickSP() task {
-	// high → medium → low
-	for q := int(model.HIGH_PRIORITY); q >= int(model.LOW_PRIORITY); q-- {
+	for q := int(model.HIGH_PRIORITY); q <= int(model.LOW_PRIORITY); q++ {
 		if len(s.queues[q]) > 0 {
 			t := s.queues[q][0]
 			s.queues[q] = s.queues[q][1:]

@@ -44,13 +44,20 @@ func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collect
 	}
 }
 
+const nearFoVMargin = 2
+
 func (s *TileScheduler) ScheduleSegment(segmentID int, deadline time.Time, cfg SegmentConfig, firstTile, lastTile int, fovTrace *fov.FOVTrace) {
 	for tileID := firstTile; tileID <= lastTile; tileID++ {
 		inFOV := fovTrace != nil && fovTrace.Contains(segmentID, tileID)
+		nearFOV := !inFOV && fovTrace != nil && fovTrace.NearFoV(segmentID, tileID, nearFoVMargin)
+
 		priority := model.LOW_PRIORITY
 		if inFOV {
 			priority = model.HIGH_PRIORITY
+		} else if nearFOV {
+			priority = model.MEDIUM_PRIORITY
 		}
+
 		requestBitrate := cfg.NonFOVBitrate
 		if inFOV {
 			requestBitrate = cfg.FOVBitrate

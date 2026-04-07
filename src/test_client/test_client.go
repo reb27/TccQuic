@@ -44,6 +44,12 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		FirstTile:       100,
 		LastTile:        177,
 	}
+	if firstSeg, lastSeg, firstTile, lastTile, ok := detectMediaBounds(); ok {
+		opts.FirstSegment = firstSeg
+		opts.LastSegment = lastSeg
+		opts.FirstTile = firstTile
+		opts.LastTile = lastTile
+	}
 
 	testSession := session.NewTestSession(client, env, opts)
 

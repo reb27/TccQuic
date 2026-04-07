@@ -5,11 +5,12 @@
 from mininet.net import Mininet, Host
 from mininet.log import setLogLevel
 from mininet.util import pmonitor
-import os, signal, subprocess
+import os, signal, subprocess, sys
 from subprocess import Popen
 from utils import HostParams, NetParams, createMininet
 
 SERVER_MODE = os.environ['SERVER_MODE']
+ABR_MODE = os.environ.get('ABR_MODE', 'bola')
 SERVER_BW = float(os.environ['SERVER_BW'])
 CLIENT_BW = float(os.environ['CLIENT_BW'])
 LOSS = float(os.environ['LOSS'])
@@ -20,6 +21,7 @@ BASE_LATENCY = int(os.environ['BASE_LATENCY'])
 FOV_TRACE_PATH = os.environ.get('FOV_TRACE_PATH', '')
 
 print('SERVER_MODE=', SERVER_MODE)
+print('ABR_MODE=', ABR_MODE)
 print('SERVER_BW=', SERVER_BW)
 print('CLIENT_BW=', CLIENT_BW)
 print('LOSS=', LOSS)
@@ -28,6 +30,41 @@ print('DELAY=', DELAY)
 print('LOAD=', LOAD)
 print('BASE_LATENCY=', BASE_LATENCY)
 print('FOV_TRACE_PATH=', FOV_TRACE_PATH)
+
+def safe_print(msg: str):
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        # Some remote TTYs expose latin-1; keep process alive by replacing chars.
+        enc = getattr(sys.stdout, 'encoding', None) or 'utf-8'
+        data = msg.encode(enc, errors='replace')
+        print(data.decode(enc, errors='replace'))
+
+def validate_media_dataset(root_dir: str):
+    segments_dir = os.path.join(root_dir, 'data', 'segments')
+    if not os.path.isdir(segments_dir):
+        raise RuntimeError(f'Missing segments directory: {segments_dir}')
+
+    # Current server reads only files named:
+    # video_tiled_10_dash_track{segment}_{tile}.m4s
+    # Validate availability without assuming fixed segment/tile ranges.
+    count = 0
+    sample = []
+    for name in os.listdir(segments_dir):
+        if name.startswith('video_tiled_10_dash_track') and name.endswith('.m4s'):
+            count += 1
+            if len(sample) < 5:
+                sample.append(name)
+
+    if count == 0:
+        raise RuntimeError(
+            'Dataset de segmentos incompatível: nenhum arquivo '
+            'video_tiled_10_dash_track*.m4s encontrado.'
+        )
+
+    safe_print(f'[dataset] encontrados {count} arquivos de segmento (track 10)')
+    if sample:
+        safe_print(f'[dataset] exemplos: {", ".join(sample)}')
 
 class Test():
     def __init__(self):
@@ -66,6 +103,7 @@ class Test():
 
         print('Running test')
         dir = os.path.dirname(os.path.realpath(__file__))
+        validate_media_dataset(dir)
 
         # Start server
         self.processes[self.server] = self.server.popen(
@@ -74,6 +112,7 @@ class Test():
             stderr=subprocess.STDOUT)
         # Start client
         client_env = os.environ.copy()
+        client_env['ABR_MODE'] = ABR_MODE
         if FOV_TRACE_PATH:
             client_env['FOV_TRACE_PATH'] = FOV_TRACE_PATH
         self.processes[self.client] = self.client.popen(
@@ -87,7 +126,7 @@ class Test():
             if line:
                 if line.endswith('\n'):
                     line = line[:-1]
-                print('[%s] %s' % (host, line))
+                safe_print('[%s] %s' % (host, line))
             if len(self.processes) != 2:
                 break
 

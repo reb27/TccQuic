@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 PROGRAM_NAME=$0
 showUsage() {
     echo "Usage: $PROGRAM_NAME [OPTIONS] <IP>"
     echo "OPTIONS:"
-    echo "--fifo, --sp, --wfq     Select server mode (default: fifo)"
+    echo "--fifo, --sp, --wfq  Select server mode (default: fifo)"
     echo "--abr MODE              Select client ABR mode (bola|legacy)"
     echo "--sbw N                 Select server bandwidth in Mbps"
     echo "--cbw N                 Select client bandwidth in Mbps"
@@ -15,6 +17,7 @@ showUsage() {
     echo "--load N                Select load %"
     echo "--fov NAME              Select FoV trace: narrow, normal, wide"
     echo "-o DIR                  Select output directory"
+    echo "--no-build              Skip compile & upload (reuse existing remote binary)"
 }
 
 SERVER_MODE="wfq"
@@ -27,14 +30,15 @@ DELAY="2"
 LOAD="10"
 BASE_LATENCY="700"
 FOV_MODE="normal"
+NO_BUILD=0
 IP=
 LOG_DIR=
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
-    --fifo) SERVER_MODE="fifo"              ; shift   ;;
-    --sp)   SERVER_MODE="sp"                ; shift   ;;
-    --wfq)  SERVER_MODE="wfq"               ; shift   ;;
+    --fifo)   SERVER_MODE="fifo"            ; shift   ;;
+    --sp)     SERVER_MODE="sp"              ; shift   ;;
+    --wfq)    SERVER_MODE="wfq"             ; shift   ;;
     --abr)  ABR_MODE="$2"                   ; shift 2 ;;
     --sbw)  SERVER_BW="$2"                  ; shift 2 ;;
     --cbw)  CLIENT_BW="$2"                  ; shift 2 ;;
@@ -45,6 +49,7 @@ while [[ "$#" > 0 ]]; do
     --load) LOAD="$2"                       ; shift 2 ;;
     --fov)   FOV_MODE="$2"                  ; shift 2 ;;
     -o)     LOG_DIR="$2"                    ; shift 2 ;;
+    --no-build) NO_BUILD=1                  ; shift   ;;
     -*)     showUsage ; exit 1              ; shift   ;;
     *)      IP="$1"                         ; shift   ;;
     esac
@@ -110,16 +115,31 @@ upload() {
 # download SOURCE DESTINATION
 download() {
     # scp não expande curingas remotamente, então usamos tar para baixar múltiplos arquivos
-    withSSH "cd $REMOTE_DIR && tar czf results.tar.gz *.csv"
+    if ! withSSH "cd $REMOTE_DIR && ls ./*.csv >/dev/null 2>&1"; then
+        echo -e "${PURPLE}[warn] Nenhum .csv em $REMOTE_DIR — nada a baixar (teste pode ter falhado cedo).${NC}"
+        return 0
+    fi
+    if ! withSSH "cd $REMOTE_DIR && tar czf results.tar.gz ./*.csv"; then
+        echo -e "${PURPLE}[warn] Falha ao criar results.tar.gz no remoto.${NC}"
+        return 0
+    fi
     scp "mininet@$IP:$REMOTE_DIR/results.tar.gz" "$2"
-    (cd "$2" && tar xzf results.tar.gz && rm results.tar.gz)
     EXIT_CODE=$?
     if [[ $EXIT_CODE != 0 ]]; then
         echo
         echo "scp download failed!"
         echo
-        exit $EXIT_CODE
+        return "$EXIT_CODE"
     fi
+    (cd "$2" && tar xzf results.tar.gz && rm results.tar.gz)
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE != 0 ]]; then
+        echo
+        echo "tar extract failed!"
+        echo
+        return "$EXIT_CODE"
+    fi
+    return 0
 }
 
 REMOTE_DIR=/tmp/server_scheduler_test
@@ -131,32 +151,35 @@ case "$FOV_MODE" in
     *)      echo "FoV inválido: $FOV_MODE (use narrow, normal ou wide)" ; exit 1 ;;
 esac
 
-echo -e "${PURPLE}Compiling...${NC}"
+if [[ "$NO_BUILD" == 0 ]]; then
+    echo -e "${PURPLE}Compiling for Linux...${NC}"
 
-(cd ../.. && go build)
-EXIT_CODE=$?
-if [[ $EXIT_CODE != 0 ]]; then
-    exit $EXIT_CODE
+    (cd ../.. && GOOS=linux GOARCH=amd64 go build -o main)
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE != 0 ]]; then
+        exit $EXIT_CODE
+    fi
+
+    echo -e "${PURPLE}Uploading to $IP at $REMOTE_DIR...${NC}"
+
+    withSSH "sudo rm -rf $REMOTE_DIR/* && mkdir -p $REMOTE_DIR"
+    upload "../../main" "$REMOTE_DIR"
+    withSSH "chmod +x $REMOTE_DIR/main"
+
+    upload "../../data" "$REMOTE_DIR"
+
+    upload "resources/server_scheduler_test.py" "$REMOTE_DIR"
+    upload "resources/utils.py" "$REMOTE_DIR"
+else
+    echo -e "${PURPLE}Skipping build/upload (--no-build)${NC}"
+    withSSH "rm -f $REMOTE_DIR/*.csv"
 fi
-
-echo -e "${PURPLE}Uploading to $IP at $REMOTE_DIR...${NC}"
-
-withSSH "sudo rm -rf $REMOTE_DIR/* && mkdir -p $REMOTE_DIR"
-upload "../../main" "$REMOTE_DIR"
-withSSH "chmod +x $REMOTE_DIR/main"
-
-upload "../../data" "$REMOTE_DIR"
-
-upload "resources/server_scheduler_test.py" "$REMOTE_DIR"
-upload "resources/utils.py" "$REMOTE_DIR"
 
 echo -e "${PURPLE}Executing...${NC}"
 
 mkdir -p "$LOG_DIR"
 if [[ ! -f "$LOG_DIR/experiment.env" ]]; then
-    : > "$LOG_DIR/experiment.env"
-fi
-cat >> "$LOG_DIR/experiment.env" <<EOF
+    cat > "$LOG_DIR/experiment.env" <<EOF
 server_mode=$SERVER_MODE
 abr_mode=$ABR_MODE
 server_bw_mbps=$SERVER_BW
@@ -168,6 +191,7 @@ background_load_pct=$LOAD
 base_latency_ms=$BASE_LATENCY
 fov_mode=$FOV_MODE
 EOF
+fi
 
 withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' ABR_MODE='$ABR_MODE' SERVER_BW='$SERVER_BW' \
@@ -175,12 +199,21 @@ withSSH "cd $REMOTE_DIR && \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             FOV_TRACE_PATH='$FOV_TRACE_PATH' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
-EXIT_CODE=$?
-echo -e "${PURPLE}Exit code: $EXIT_CODE${NC}"
+PY_RC=${PIPESTATUS[0]}
+TEE_RC=${PIPESTATUS[1]}
+echo -e "${PURPLE}Exit codes: ssh/python=$PY_RC tee=$TEE_RC${NC}"
 
-download "$REMOTE_DIR/*.csv" "$LOG_DIR"
+download "$REMOTE_DIR/*.csv" "$LOG_DIR" || true
 
-resources/plot_server_scheduler_test_results.py "$LOG_DIR"/*.csv \
-    "$LOG_DIR"
+shopt -s nullglob
+CSV_FILES=( "$LOG_DIR"/*.csv )
+shopt -u nullglob
+if ((${#CSV_FILES[@]} > 0)); then
+    resources/plot_server_scheduler_test_results.py "${CSV_FILES[@]}" "$LOG_DIR" \
+        || echo -e "${PURPLE}[warn] plot_server_scheduler_test_results.py falhou (ignorado).${NC}"
+else
+    echo -e "${PURPLE}[warn] Sem CSV em $LOG_DIR — plot local ignorado.${NC}"
+fi
 
 echo -e "${PURPLE}Logs: $(cd "$LOG_DIR" && pwd)${NC}"
+exit "$PY_RC"
