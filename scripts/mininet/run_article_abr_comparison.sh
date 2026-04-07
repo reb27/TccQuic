@@ -12,6 +12,10 @@
 #   --legacy            Old triple-scenario layout (SP/WFQ only, old plot path)
 #   --full              Legacy profile + many base latencies (heavy)
 #
+# Matriz (--matrix / --fast / --pilot): exporta SKIP_LOCAL_PLOTS=1 para cada
+# server_scheduler_test.sh (sem PNGs por pasta). Gráfico agregado: plot_tile_missing_ratio.py.
+# Para manter plots por corrida: SKIP_LOCAL_PLOTS=0 ./run_article_abr_comparison.sh ...
+#
 
 set -euo pipefail
 
@@ -126,6 +130,8 @@ scheduler_flag() {
 }
 
 launchMatrix() {
+    # Evita matplotlib por corrida; o gráfico principal é plot_tile_missing_ratio.py no fim.
+    export SKIP_LOCAL_PLOTS="${SKIP_LOCAL_PLOTS:-1}"
     local bg loss sched abr flag
     for bg in "${BACKGROUND_LOADS[@]}"; do
         for loss in "${LOSS_RATES[@]}"; do
