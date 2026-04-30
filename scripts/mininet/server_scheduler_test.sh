@@ -203,8 +203,9 @@ withSSH "cd $REMOTE_DIR && \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             FOV_TRACE_PATH='$FOV_TRACE_PATH' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
-PY_RC=${PIPESTATUS[0]}
-TEE_RC=${PIPESTATUS[1]}
+PIPE_RC=( "${PIPESTATUS[@]}" )
+PY_RC=${PIPE_RC[0]:-1}
+TEE_RC=${PIPE_RC[1]:-0}
 echo -e "${PURPLE}Exit codes: ssh/python=$PY_RC tee=$TEE_RC${NC}"
 
 download "$REMOTE_DIR/*.csv" "$LOG_DIR" || true

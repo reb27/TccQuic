@@ -1,0 +1,9 @@
+time_ns,segment,tile,priority,latency_ns,timedout,skipped,ok,tp,buffer_s,tile_missing_ratio,in_fov,on_time,bitrate
+1000000,1,100,0,500000,false,false,true,0,0.1,0,true,true,10
+2000000,1,101,0,480000,false,false,true,0,0.2,0,true,true,10
+3000000,1,102,2,600000,false,false,true,0,0.15,0,false,true,3
+4000000,1,103,2,550000,false,false,true,0,0.12,0,false,true,3
+5000000,1,104,2,520000,false,false,true,0,0.11,0,false,true,3
+6000000,1,105,0,490000,false,false,true,0,0.2,0,true,true,5
+7000000,1,106,2,610000,false,false,true,0,0.1,0,false,true,3
+8000000,1,107,0,500000,false,false,true,0,0.22,0,true,true,10

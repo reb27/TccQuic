@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"main/src/model"
 	"os"
 	"strings"
 	"testing"
@@ -60,6 +61,38 @@ func TestClientQUICUplinkLossRateAggSeriesAndHandshakeExclusion(t *testing.T) {
 	}
 	if series[1].LostPackets != 0 || series[1].AckedPackets != 1 || series[1].Percent != 0 {
 		t.Fatalf("unexpected second bucket counts: %+v", series[1])
+	}
+}
+
+func TestStatisticsLoggerIncludesBitrateColumn(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/stats.csv"
+	logger := NewStatisticsLogger(path)
+	logger.Log(
+		time.Second,
+		model.VideoPacketRequest{Segment: 1, Tile: 2, Priority: 0, Bitrate: model.HIGH_BITRATE},
+		50*time.Millisecond,
+		false,
+		false,
+		true,
+		1.0,
+		1.5,
+		0.0,
+		true,
+		true,
+	)
+	logger.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stats: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, ",on_time,bitrate\n") {
+		t.Fatalf("expected bitrate in header: %s", content)
+	}
+	if !strings.Contains(content, ",true,true,10\n") {
+		t.Fatalf("expected HIGH_BITRATE (10) in row: %s", content)
 	}
 }
 

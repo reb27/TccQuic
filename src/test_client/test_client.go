@@ -50,6 +50,26 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		opts.FirstTile = firstTile
 		opts.LastTile = lastTile
 	}
+	if segs, ok := detectValidSegmentIDs(); ok && len(segs) > 0 {
+		opts.ValidSegments = segs
+		opts.FirstSegment = segs[0]
+		opts.LastSegment = segs[len(segs)-1]
+	}
+
+	if limit := SegmentLimitFromEnv(); limit > 0 {
+		if len(opts.ValidSegments) > limit {
+			opts.ValidSegments = append([]int(nil), opts.ValidSegments[:limit]...)
+			opts.FirstSegment = opts.ValidSegments[0]
+			opts.LastSegment = opts.ValidSegments[len(opts.ValidSegments)-1]
+			log.Printf("TEST_CLIENT_SEGMENT_LIMIT=%d: using %d segment(s) %d..%d", limit, len(opts.ValidSegments), opts.FirstSegment, opts.LastSegment)
+		} else if len(opts.ValidSegments) == 0 {
+			span := opts.LastSegment - opts.FirstSegment + 1
+			if span > limit {
+				opts.LastSegment = opts.FirstSegment + limit - 1
+				log.Printf("TEST_CLIENT_SEGMENT_LIMIT=%d: using contiguous segments %d..%d", limit, opts.FirstSegment, opts.LastSegment)
+			}
+		}
+	}
 
 	testSession := session.NewTestSession(client, env, opts)
 

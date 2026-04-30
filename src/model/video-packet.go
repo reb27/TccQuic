@@ -202,11 +202,40 @@ func ReadVideoPacketResponse(reader *bufio.Reader) (res *VideoPacketResponse, er
 // EstimateTileSize retorna o tamanho em bytes do arquivo do tile no disco (estimativa para VoI).
 func EstimateTileSize(req *VideoPacketRequest) int64 {
 	basePath, _ := os.Getwd()
-	full := fmt.Sprintf("%s/data/segments/video_tiled_10_dash_track%d_%d.m4s",
-		basePath, req.Segment, req.Tile)
-	st, err := os.Stat(full)
-	if err != nil {
-		return 200000 // Fallback se arquivo não existir
+	for _, rep := range estimateRepCandidates(req.Bitrate) {
+		full := fmt.Sprintf("%s/data/segments/video_tiled_%d_dash_track%d_%d.m4s",
+			basePath, rep, req.Segment, req.Tile)
+		st, err := os.Stat(full)
+		if err == nil {
+			return st.Size()
+		}
 	}
-	return st.Size()
+	return 200000 // Fallback se arquivo não existir
+}
+
+func estimateRepFromBitrate(b Bitrate) int {
+	switch b {
+	case LOW_BITRATE:
+		return 5
+	case MEDIUM_BITRATE:
+		return 10
+	case HIGH_BITRATE:
+		return 15
+	default:
+		return 10
+	}
+}
+
+func estimateRepCandidates(b Bitrate) []int {
+	primary := estimateRepFromBitrate(b)
+	candidates := []int{primary, 10, 5, 15}
+	uniq := make([]int, 0, len(candidates))
+	seen := map[int]bool{}
+	for _, rep := range candidates {
+		if !seen[rep] {
+			seen[rep] = true
+			uniq = append(uniq, rep)
+		}
+	}
+	return uniq
 }

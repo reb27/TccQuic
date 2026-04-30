@@ -11,6 +11,7 @@ import (
 	"main/src/server/metrics"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -407,13 +408,53 @@ func readFile(req *model.VideoPacketRequest) []byte {
 	if err != nil {
 		log.Printf("[FS] getwd err: %v", err)
 	}
-	filePath := fmt.Sprintf("/data/segments/video_tiled_10_dash_track%d_%d.m4s",
-		req.Segment, req.Tile)
-	full := basePath + filePath
-	data, err := os.ReadFile(full)
-	if err != nil {
-		log.Printf("[FS] read err: %v path=%s", err, full)
-		return nil
+
+	var firstErr error
+	for _, rep := range representationCandidates(req.Bitrate) {
+		filePath := fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s",
+			rep, req.Segment, req.Tile)
+		full := basePath + filePath
+		data, readErr := os.ReadFile(full)
+		if readErr == nil {
+			log.Printf("[FS] selected rep=%d for seg=%d tile=%d bitrate=%d", rep, req.Segment, req.Tile, req.Bitrate)
+			return data
+		}
+		if firstErr == nil {
+			firstErr = readErr
+		}
+		log.Printf("[FS] miss rep=%d path=%s err=%v", rep, full, readErr)
 	}
-	return data
+
+	if firstErr != nil {
+		log.Printf("[FS] read err (all reps failed): %v seg=%d tile=%d bitrate=%d tried=%s",
+			firstErr, req.Segment, req.Tile, req.Bitrate, strings.Trim(fmt.Sprint(representationCandidates(req.Bitrate)), "[]"))
+	}
+	return nil
+}
+
+func representationForBitrate(b model.Bitrate) int {
+	switch b {
+	case model.LOW_BITRATE:
+		return 5
+	case model.MEDIUM_BITRATE:
+		return 10
+	case model.HIGH_BITRATE:
+		return 15
+	default:
+		return 10
+	}
+}
+
+func representationCandidates(b model.Bitrate) []int {
+	primary := representationForBitrate(b)
+	candidates := []int{primary, 10, 5, 15}
+	uniq := make([]int, 0, len(candidates))
+	seen := map[int]bool{}
+	for _, rep := range candidates {
+		if !seen[rep] {
+			seen[rep] = true
+			uniq = append(uniq, rep)
+		}
+	}
+	return uniq
 }

@@ -25,6 +25,9 @@ type Options struct {
 	LastSegment     int
 	FirstTile       int
 	LastTile        int
+	// ValidSegments, if non-empty, restricts iteration to these segment IDs (sorted).
+	// FirstSegment/LastSegment should still be min/max of this list for playback timing and metrics spans.
+	ValidSegments []int
 }
 
 type Environment struct {
@@ -92,10 +95,14 @@ func (s *TestSession) Run() error {
 
 	startTime := time.Now()
 	scheduler := NewTileScheduler(s.client, s.playback, s.collector, s.metrics, s.statsLogger, s.semaphore, startTime, &s.lastDownloadedSegment)
-	log.Printf("Starting test iteration for segments %d to %d (tiles %d to %d)", s.opts.FirstSegment, s.opts.LastSegment, s.opts.FirstTile, s.opts.LastTile)
+	if len(s.opts.ValidSegments) > 0 {
+		log.Printf("Starting test iteration for %d segment(s) present on disk (tiles %d to %d)", len(s.opts.ValidSegments), s.opts.FirstTile, s.opts.LastTile)
+	} else {
+		log.Printf("Starting test iteration for segments %d to %d (tiles %d to %d)", s.opts.FirstSegment, s.opts.LastSegment, s.opts.FirstTile, s.opts.LastTile)
+	}
 	fmt.Printf("Test started with parallelism = %d\n", s.opts.Parallelism)
 
-	for segmentID := s.opts.FirstSegment; segmentID <= s.opts.LastSegment; segmentID++ {
+	for _, segmentID := range s.segmentIDsInOrder() {
 		s.processSegment(segmentID, scheduler)
 	}
 
@@ -105,6 +112,21 @@ func (s *TestSession) Run() error {
 	fmt.Println("Test iteration complete.")
 	s.finalize(startTime, scheduler.FirstRequestTime())
 	return nil
+}
+
+func (s *TestSession) segmentIDsInOrder() []int {
+	if len(s.opts.ValidSegments) > 0 {
+		return s.opts.ValidSegments
+	}
+	n := s.opts.LastSegment - s.opts.FirstSegment + 1
+	if n <= 0 {
+		return nil
+	}
+	out := make([]int, 0, n)
+	for i := s.opts.FirstSegment; i <= s.opts.LastSegment; i++ {
+		out = append(out, i)
+	}
+	return out
 }
 
 func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {

@@ -1,0 +1,3 @@
+# Scripts uploaded to Linux/Mininet must keep Unix line endings
+scripts/mininet/resources/*.py eol=lf
+scripts/mininet/*.sh eol=lf

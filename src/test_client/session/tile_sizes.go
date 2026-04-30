@@ -3,12 +3,15 @@ package session
 import (
 	"fmt"
 	"os"
+	"regexp"
 )
 
 type TileSizeEstimator struct {
 	byTile    map[int]int64
 	globalAvg int64
 }
+
+var tileSizeFilePattern = regexp.MustCompile(`^video_tiled_(\d+)_dash_track(\d+)_(\d+)\.m4s$`)
 
 func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 	entries, err := os.ReadDir(dir)
@@ -26,9 +29,21 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 			continue
 		}
 		name := entry.Name()
+		m := tileSizeFilePattern.FindStringSubmatch(name)
+		if m == nil {
+			continue
+		}
+		// m[1] = representation, m[2] = segment, m[3] = tile
+		var rep int
+		if _, err := fmt.Sscanf(m[1], "%d", &rep); err != nil {
+			continue
+		}
+		// Keep estimator baseline aligned with original dataset behavior.
+		if rep != 10 {
+			continue
+		}
 		var tileID int
-		var segmentID int
-		if _, err := fmt.Sscanf(name, "video_tiled_10_dash_track%d_%d.m4s", &tileID, &segmentID); err != nil {
+		if _, err := fmt.Sscanf(m[3], "%d", &tileID); err != nil {
 			continue
 		}
 		info, err := entry.Info()

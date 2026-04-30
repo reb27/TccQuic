@@ -9,14 +9,16 @@ Matrix mode (default: single LOG_DIR arg):
 
   Each figure: 1×2 subplots (BOLA | Legacy). Lines:
     FIFO — single aggregate line (no priority split)
-    SP, WFQ — high (prio 0) and low (prio 2) only
+    SP, WFQ — high (prio 0), medium (prio 1), low (prio 2)
 
 Legacy mode (LOG_DIR + OUTPUT_PNG):
   Original SP/WFQ plot with high / medium / low for old folder layout.
 
 CSV: statistics-*.csv columns ok, skipped, priority (see metrics.go).
+Synthetic S-curves are opt-in (--synthetic-demo); by default sparse runs plot only real points.
 """
 
+import argparse
 import csv
 import os
 import sys
@@ -61,7 +63,7 @@ ABR_TITLES = {'bola': 'ABR BOLA', 'legacy': 'Legacy'}
 ABR_ORDER = ['bola', 'legacy']
 
 MATRIX_SCHEDULERS = ('fifo', 'sp', 'wfq')
-MATRIX_PRIO = ('high', 'low')
+MATRIX_PRIO = ('high', 'medium', 'low')
 
 
 def _parse_bool(v: str) -> bool:
@@ -188,7 +190,7 @@ def detect_matrix_background_levels(root_dir: str) -> list:
 def collect_matrix_data(root_dir: str, bg_filter: int) -> dict:
     """
     {(abr, scheduler, prio_key, loss_pct): avg_ratio}
-    prio_key is 'overall' for fifo, else 'high' / 'low'.
+    prio_key is 'overall' for fifo, else 'high' / 'medium' / 'low'.
     """
     raw = defaultdict(list)
 
@@ -216,7 +218,7 @@ def collect_matrix_data(root_dir: str, bg_filter: int) -> dict:
             raw[(abr, 'fifo', 'overall', loss_pct)].append(overall)
         else:
             ratios = _compute_missing_ratio(csv_files)
-            for prio_int, pname in ((0, 'high'), (2, 'low')):
+            for prio_int, pname in ((0, 'high'), (1, 'medium'), (2, 'low')):
                 if prio_int in ratios:
                     raw[(abr, scheduler, pname, loss_pct)].append(ratios[prio_int])
 
@@ -247,6 +249,25 @@ def _generate_synthetic() -> dict:
     return data
 
 
+def _loss_axis_from_data(data: dict) -> tuple:
+    """Returns (xmin, xmax, xticks, sorted_losses)."""
+    losses = sorted({k[3] for k in data})
+    if not losses:
+        return 0.0, 25.0, [0, 5, 10, 15, 20, 25], losses
+    lo, hi = min(losses), max(losses)
+    if len(losses) == 1:
+        pad = 2.0
+    else:
+        pad = max(0.5, 0.02 * (hi - lo))
+    xmin = max(0.0, lo - pad)
+    xmax = min(25.0, hi + pad)
+    if len(losses) <= 10:
+        xticks = losses
+    else:
+        xticks = list(range(0, 26, 5))
+    return xmin, xmax, xticks, losses
+
+
 def _generate_synthetic_matrix(bg_pct: int) -> dict:
     """S-curves shifted by background load for demo when data is sparse."""
     x = np.linspace(0, 25, 60)
@@ -257,12 +278,16 @@ def _generate_synthetic_matrix(bg_pct: int) -> dict:
         ('bola', 'fifo', 'overall', 0.32, 11.0 + shift),
         ('legacy', 'fifo', 'overall', 0.30, 10.5 + shift),
         ('bola', 'sp', 'high', 0.38, 9.5 + shift),
+        ('bola', 'sp', 'medium', 0.40, 7.8 + shift),
         ('bola', 'sp', 'low', 0.42, 6.0 + shift),
         ('legacy', 'sp', 'high', 0.36, 9.0 + shift),
+        ('legacy', 'sp', 'medium', 0.41, 7.2 + shift),
         ('legacy', 'sp', 'low', 0.44, 5.5 + shift),
         ('bola', 'wfq', 'high', 0.34, 10.5 + shift),
+        ('bola', 'wfq', 'medium', 0.37, 8.5 + shift),
         ('bola', 'wfq', 'low', 0.40, 6.5 + shift),
         ('legacy', 'wfq', 'high', 0.33, 10.0 + shift),
+        ('legacy', 'wfq', 'medium', 0.36, 8.0 + shift),
         ('legacy', 'wfq', 'low', 0.41, 6.0 + shift),
     ]
     for abr, sched, prio, k, x0 in specs:
@@ -279,7 +304,7 @@ def plot_legacy(data: dict, output_path: str):
         pass
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    loss_values = sorted({loss for (_, _, _, loss) in data})
+    xmin, xmax, xticks, loss_values = _loss_axis_from_data(data)
     x_max = max(loss_values) if loss_values else 25
 
     for ax_idx, abr in enumerate(ABR_ORDER):
@@ -309,14 +334,16 @@ def plot_legacy(data: dict, output_path: str):
         ax.set_xlabel('Loss rate (%)', fontsize=11)
         if ax_idx == 0:
             ax.set_ylabel('Tile missing ratio (%)', fontsize=11)
-        ax.set_xlim(0, 25)
+        ax.set_xlim(xmin, xmax)
         ax.set_ylim(0, 100)
-        ax.set_xticks([0, 5, 10, 15, 20, 25])
+        if xticks:
+            ax.set_xticks(xticks)
         ax.set_yticks([0, 20, 40, 60, 80, 100])
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         ax.grid(axis='x', visible=False)
 
-        _add_inset(ax, abr_series, SCHEDULER_COLORS_LEGACY, x_max)
+        if loss_values and min(loss_values) <= 5:
+            _add_inset(ax, abr_series, SCHEDULER_COLORS_LEGACY, x_max)
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncol=3, fontsize=9,
@@ -378,7 +405,7 @@ def plot_matrix(data: dict, output_path: str, bg_caption: str):
         pass
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    loss_values = sorted({loss for (_, _, _, loss) in data})
+    xmin, xmax, xticks, loss_values = _loss_axis_from_data(data)
     x_max = max(loss_values) if loss_values else 25
 
     sched_order = ['fifo', 'sp', 'wfq']
@@ -424,22 +451,24 @@ def plot_matrix(data: dict, output_path: str, bg_caption: str):
         ax.set_xlabel('Loss rate (%)', fontsize=11)
         if ax_idx == 0:
             ax.set_ylabel('Tile missing ratio (%)', fontsize=11)
-        ax.set_xlim(0, 25)
+        ax.set_xlim(xmin, xmax)
         ax.set_ylim(0, 100)
-        ax.set_xticks([0, 5, 10, 15, 20, 25])
+        if xticks:
+            ax.set_xticks(xticks)
         ax.set_yticks([0, 20, 40, 60, 80, 100])
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         ax.grid(axis='x', visible=False)
-        _add_inset(ax, abr_series, SCHEDULER_COLORS_MATRIX, x_max)
+        if loss_values and min(loss_values) <= 5:
+            _add_inset(ax, abr_series, SCHEDULER_COLORS_MATRIX, x_max)
 
     fig.suptitle(
         f'Tile missing ratio vs loss ({bg_caption} background traffic)',
         fontsize=12, fontweight='bold', y=1.02,
     )
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncol=3, fontsize=8,
+    fig.legend(handles, labels, loc='upper center', ncol=4, fontsize=7,
                bbox_to_anchor=(0.5, 0.99))
-    fig.tight_layout(rect=[0, 0, 1, 0.88])
+    fig.tight_layout(rect=[0, 0, 1, 0.86])
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     fig.savefig(output_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -447,25 +476,40 @@ def plot_matrix(data: dict, output_path: str, bg_caption: str):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(f'Usage: {sys.argv[0]} <LOG_DIR> [OUTPUT_PNG]')
-        print('  Matrix:  python3 script.py LOG_DIR')
-        print('           -> tile_missing_ratio_bg<BG>.png per background level')
-        print('  Legacy:  python3 script.py LOG_DIR path/to/out.png')
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='Plot tile missing ratio vs packet loss (matrix or legacy log trees).',
+    )
+    parser.add_argument(
+        'log_dir',
+        help='Root directory containing experiment.env subfolders',
+    )
+    parser.add_argument(
+        'output_png',
+        nargs='?',
+        help='Optional: single output path (legacy layout mode)',
+    )
+    parser.add_argument(
+        '--synthetic-demo',
+        action='store_true',
+        help='If fewer than 3 loss points, plot fake S-curves (old default; not real data).',
+    )
+    args = parser.parse_args()
+    root_dir = args.log_dir
+    use_synthetic = args.synthetic_demo
 
-    root_dir = sys.argv[1]
     if not os.path.isdir(root_dir):
         print(f'Error: {root_dir} is not a directory')
         sys.exit(1)
 
-    if len(sys.argv) >= 3:
-        output_path = sys.argv[2]
+    if args.output_png:
+        output_path = args.output_png
         data = collect_data(root_dir)
         distinct_losses = {loss for (_, _, _, loss) in data}
-        if len(distinct_losses) < 3:
-            print('[info] Sparse legacy data — using synthetic demonstration curves.')
+        if len(distinct_losses) < 3 and use_synthetic:
+            print('[info] Sparse legacy data — using synthetic demonstration curves (--synthetic-demo).')
             data = _generate_synthetic()
+        elif len(distinct_losses) < 3:
+            print('[info] Sparse legacy data — plotting real points only (use --synthetic-demo for fake curves).')
         plot_legacy(data, output_path)
         return
 
@@ -475,8 +519,10 @@ def main():
               'writing single tile_missing_ratio.png with legacy collector.')
         data = collect_data(root_dir)
         distinct_losses = {loss for (_, _, _, loss) in data}
-        if len(distinct_losses) < 3:
+        if len(distinct_losses) < 3 and use_synthetic:
             data = _generate_synthetic()
+        elif len(distinct_losses) < 3:
+            print('[info] Sparse data — plotting real points only.')
         out = os.path.join(root_dir, 'tile_missing_ratio.png')
         plot_legacy(data, out)
         return
@@ -484,10 +530,15 @@ def main():
     for bg in bgs:
         data = collect_matrix_data(root_dir, bg)
         distinct_losses = {loss for (_, _, _, loss) in data}
-        if len(distinct_losses) < 3:
+        if len(distinct_losses) < 3 and use_synthetic:
             print(f'[info] BG {bg}%: only {len(distinct_losses)} loss point(s) '
-                  f'— synthetic demo curves.')
+                  f'— synthetic demo curves (--synthetic-demo).')
             data = _generate_synthetic_matrix(bg)
+        elif len(distinct_losses) < 3:
+            print(
+                f'[info] BG {bg}%: only {len(distinct_losses)} loss point(s) '
+                f'— plotting real data only.',
+            )
         out = os.path.join(root_dir, f'tile_missing_ratio_bg{bg}.png')
         plot_matrix(data, out, f'{bg}%')
 

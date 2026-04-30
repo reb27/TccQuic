@@ -64,3 +64,17 @@ func getEnvInt(key string, fallback int) int {
 	}
 	return parsed
 }
+
+// SegmentLimitFromEnv returns TEST_CLIENT_SEGMENT_LIMIT if set to a positive
+// integer, otherwise 0 (no limit). Used to shorten proof / CI runs.
+func SegmentLimitFromEnv() int {
+	val := os.Getenv("TEST_CLIENT_SEGMENT_LIMIT")
+	if val == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}

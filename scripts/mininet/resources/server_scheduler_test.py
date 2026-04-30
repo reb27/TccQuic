@@ -45,24 +45,33 @@ def validate_media_dataset(root_dir: str):
     if not os.path.isdir(segments_dir):
         raise RuntimeError(f'Missing segments directory: {segments_dir}')
 
-    # Current server reads only files named:
-    # video_tiled_10_dash_track{segment}_{tile}.m4s
-    # Validate availability without assuming fixed segment/tile ranges.
+    # Server expects files named:
+    # video_tiled_{representation}_dash_track{segment}_{tile}.m4s
+    # Validate at least one representation exists and capture examples.
     count = 0
+    by_rep = {}
     sample = []
     for name in os.listdir(segments_dir):
-        if name.startswith('video_tiled_10_dash_track') and name.endswith('.m4s'):
+        if name.startswith('video_tiled_') and '_dash_track' in name and name.endswith('.m4s'):
             count += 1
+            try:
+                rep = int(name.split('_')[2])
+                by_rep[rep] = by_rep.get(rep, 0) + 1
+            except Exception:
+                pass
             if len(sample) < 5:
                 sample.append(name)
 
     if count == 0:
         raise RuntimeError(
             'Dataset de segmentos incompatível: nenhum arquivo '
-            'video_tiled_10_dash_track*.m4s encontrado.'
+            'video_tiled_{rep}_dash_track*.m4s encontrado.'
         )
 
-    safe_print(f'[dataset] encontrados {count} arquivos de segmento (track 10)')
+    safe_print(f'[dataset] encontrados {count} arquivos de segmento')
+    if by_rep:
+        reps = ', '.join(f'rep{rep}={n}' for rep, n in sorted(by_rep.items()))
+        safe_print(f'[dataset] representacoes: {reps}')
     if sample:
         safe_print(f'[dataset] exemplos: {", ".join(sample)}')
 
