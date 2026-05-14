@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Minimal run: one scheduler (FIFO), one ABR (BOLA), no loss sweep — validates
+# Minimal run: one scheduler (default WFQ), one ABR (BOLA), no loss sweep — validates
 # multi-representation paths end-to-end. Produces bitrate_mix.png from real CSVs.
+# When request_order exists, also produces fov_request_order.png.
 #
 # Usage:
-#   ./run_bitrate_smoke.sh [--reuse] <IP>
+#   ./run_bitrate_smoke.sh [--reuse] [--scheduler fifo|sp|wfq] <IP>
 #
 # --reuse  Skip local/remote build on first invocation (same as server_scheduler_test --no-build).
 #
@@ -13,16 +14,31 @@ set -euo pipefail
 
 PROGRAM_NAME=$0
 showUsage() {
-    echo "Usage: $PROGRAM_NAME [--reuse] <IP>"
+    echo "Usage: $PROGRAM_NAME [--reuse] [--scheduler fifo|sp|wfq] <IP>"
+}
+
+scheduler_flag() {
+    case "$1" in
+        fifo) printf '%s\n' --fifo ;;
+        sp)   printf '%s\n' --sp ;;
+        wfq)  printf '%s\n' --wfq ;;
+        *)    echo "unknown scheduler: $1" >&2; exit 1 ;;
+    esac
 }
 
 REUSE_REMOTE=0
+SCHEDULER="wfq"
 IP=
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
-    --reuse) REUSE_REMOTE=1 ; shift ;;
-    -*)      showUsage ; exit 1 ;;
-    *)       IP="$1" ; shift ;;
+    --reuse)     REUSE_REMOTE=1 ; shift ;;
+    --scheduler)
+        if [[ "$#" -lt 2 ]]; then showUsage; exit 1; fi
+        SCHEDULER="$2"
+        shift 2
+        ;;
+    -*)          showUsage ; exit 1 ;;
+    *)           IP="$1" ; shift ;;
     esac
 done
 
@@ -44,14 +60,14 @@ while true; do
 done
 mkdir -p "$SUPER_LOG_DIR"
 
-SCHEDULER="fifo"
 ABR="bola"
-PARALLELISM=24
+PARALLELISM=60
 BASE_LATENCY=450
-BW=200
+BW=60
 DELAY_MS=24
 BG=10
-LOSS=0
+LOSS=10
+SCHEDULER_FLAG=$(scheduler_flag "$SCHEDULER")
 
 export SKIP_LOCAL_PLOTS="${SKIP_LOCAL_PLOTS:-1}"
 
@@ -72,7 +88,7 @@ loss_pct=$LOSS
 parallelism=$PARALLELISM
 EOF
 
-PARAMS=(-o "$log_dir" --fifo --abr "$ABR" --sbw "$BW" --cbw "$BW" \
+PARAMS=(-o "$log_dir" "$SCHEDULER_FLAG" --abr "$ABR" --sbw "$BW" --cbw "$BW" \
     --loss "$LOSS" -p "$PARALLELISM" --delay "$DELAY_MS" --load "$BG" \
     --baselatency "$BASE_LATENCY")
 printf "%s\n" "${PARAMS[*]}" > "$log_dir/parameters"

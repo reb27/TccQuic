@@ -25,9 +25,14 @@ type Options struct {
 	LastSegment     int
 	FirstTile       int
 	LastTile        int
+	MediaLayout     *MediaLayout
 	// ValidSegments, if non-empty, restricts iteration to these segment IDs (sorted).
 	// FirstSegment/LastSegment should still be min/max of this list for playback timing and metrics spans.
 	ValidSegments []int
+}
+
+type MediaLayout struct {
+	SegmentTiles map[int][]int
 }
 
 type Environment struct {
@@ -56,7 +61,7 @@ type TestSession struct {
 	fovTrace      *fov.FOVTrace
 
 	lastDownloadedSegment atomic.Int32
-	tileUniverse          []int
+	fallbackTileUniverse  []int
 }
 
 func NewTestSession(client RequestSender, env Environment, opts Options) *TestSession {
@@ -69,17 +74,17 @@ func NewTestSession(client RequestSender, env Environment, opts Options) *TestSe
 	abr := SelectABRController(env)
 
 	s := &TestSession{
-		client:        client,
-		env:           env,
-		opts:          opts,
-		statsLogger:   statsLogger,
-		summaryLogger: summaryLogger,
-		playback:      playback,
-		metrics:       metricSet,
-		collector:     collector,
-		abr:           abr,
-		semaphore:     semaphore,
-		tileUniverse:  buildTileUniverse(opts.FirstTile, opts.LastTile),
+		client:               client,
+		env:                  env,
+		opts:                 opts,
+		statsLogger:          statsLogger,
+		summaryLogger:        summaryLogger,
+		playback:             playback,
+		metrics:              metricSet,
+		collector:            collector,
+		abr:                  abr,
+		semaphore:            semaphore,
+		fallbackTileUniverse: buildTileUniverse(opts.FirstTile, opts.LastTile),
 	}
 	s.lastDownloadedSegment.Store(int32(opts.FirstSegment - 1))
 	return s
@@ -144,12 +149,18 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 	timeBudget += s.opts.SegmentDuration
 	segmentDeadline := time.Now().Add(timeBudget)
 
-	s.metrics.AllTiles.SetRequired(segmentID, s.tileUniverse)
-	s.metrics.DeadlineLateness.SetRequired(segmentID, s.tileUniverse)
+	segmentTiles := s.tilesForSegment(segmentID)
+	if len(segmentTiles) == 0 {
+		log.Printf("Skipping segment %d: no media tiles available", segmentID)
+		return
+	}
+
+	s.metrics.AllTiles.SetRequired(segmentID, segmentTiles)
+	s.metrics.DeadlineLateness.SetRequired(segmentID, segmentTiles)
 
 	var fovTiles []int
 	if s.fovTrace != nil {
-		fovTiles = filterTilesInRange(s.fovTrace.TilesForSegment(segmentID), s.opts.FirstTile, s.opts.LastTile)
+		fovTiles = filterTilesAvailable(s.fovTrace.TilesForSegment(segmentID), segmentTiles)
 	}
 	s.metrics.FOVTiles.SetRequired(segmentID, fovTiles)
 
@@ -162,11 +173,11 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 		AvgThroughput:   avgThroughput,
 		BufferLevel:     bufferLevel,
 		FOVTiles:        fovTiles,
-		AllTiles:        s.tileUniverse,
+		AllTiles:        segmentTiles,
 	}
 	cfg := s.abr.SelectConfig(ctx)
 	log.Printf("ABR: cfg=%s fov_bitrate=%d nonfov_bitrate=%d avg_tp=%.2f buffer=%.2f s", cfg.ID, cfg.FOVBitrate, cfg.NonFOVBitrate, avgThroughput, bufferLevel.Seconds())
-	scheduler.ScheduleSegment(segmentID, segmentDeadline, cfg, s.opts.FirstTile, s.opts.LastTile, s.fovTrace)
+	scheduler.ScheduleSegment(segmentID, segmentDeadline, cfg, segmentTiles, s.fovTrace)
 }
 
 func (s *TestSession) finalize(startTime time.Time, firstRequestTime time.Time) {
@@ -248,13 +259,26 @@ func buildTileUniverse(firstTile, lastTile int) []int {
 	return tiles
 }
 
-func filterTilesInRange(tiles []int, min, max int) []int {
+func (s *TestSession) tilesForSegment(segmentID int) []int {
+	if s.opts.MediaLayout != nil {
+		if tiles := s.opts.MediaLayout.SegmentTiles[segmentID]; len(tiles) > 0 {
+			return tiles
+		}
+	}
+	return s.fallbackTileUniverse
+}
+
+func filterTilesAvailable(tiles []int, available []int) []int {
 	if len(tiles) == 0 {
 		return nil
 	}
+	availableSet := make(map[int]struct{}, len(available))
+	for _, tile := range available {
+		availableSet[tile] = struct{}{}
+	}
 	filtered := make([]int, 0, len(tiles))
 	for _, tile := range tiles {
-		if tile >= min && tile <= max {
+		if _, ok := availableSet[tile]; ok {
 			filtered = append(filtered, tile)
 		}
 	}
