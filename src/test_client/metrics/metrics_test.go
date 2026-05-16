@@ -80,6 +80,7 @@ func TestStatisticsLoggerIncludesBitrateColumn(t *testing.T) {
 		0.0,
 		true,
 		true,
+		7,
 	)
 	logger.Close()
 
@@ -88,11 +89,11 @@ func TestStatisticsLoggerIncludesBitrateColumn(t *testing.T) {
 		t.Fatalf("read stats: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, ",on_time,bitrate\n") {
-		t.Fatalf("expected bitrate in header: %s", content)
+	if !strings.Contains(content, ",on_time,bitrate,request_order\n") {
+		t.Fatalf("expected bitrate and request_order in header: %s", content)
 	}
-	if !strings.Contains(content, ",true,true,10\n") {
-		t.Fatalf("expected HIGH_BITRATE (10) in row: %s", content)
+	if !strings.Contains(content, ",true,true,10,7\n") {
+		t.Fatalf("expected HIGH_BITRATE (10) and request_order in row: %s", content)
 	}
 }
 

@@ -20,7 +20,7 @@ type StatisticsLogger struct {
 }
 
 func NewStatisticsLogger(path string) *StatisticsLogger {
-	const header = "time_ns,segment,tile,priority,latency_ns,timedout,skipped,ok,tp,buffer_s,tile_missing_ratio,in_fov,on_time,bitrate\n"
+	const header = "time_ns,segment,tile,priority,latency_ns,timedout,skipped,ok,tp,buffer_s,tile_missing_ratio,in_fov,on_time,bitrate,request_order\n"
 	file, err := os.Create(path)
 	if err != nil {
 		log.Panicf("Failed to open %s: %s\n", path, err)
@@ -32,10 +32,10 @@ func NewStatisticsLogger(path string) *StatisticsLogger {
 	return &StatisticsLogger{fileWriter: fileWriter, file: file}
 }
 
-func (s *StatisticsLogger) Log(timeFromStart time.Duration, r model.VideoPacketRequest, latency time.Duration, timedOut bool, skipped bool, ok bool, tp float64, bufferSec float64, tileMissingRatio float64, inFOV bool, onTime bool) {
+func (s *StatisticsLogger) Log(timeFromStart time.Duration, r model.VideoPacketRequest, latency time.Duration, timedOut bool, skipped bool, ok bool, tp float64, bufferSec float64, tileMissingRatio float64, inFOV bool, onTime bool, requestOrder int) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	row := fmt.Sprintf("%d,%d,%d,%d,%d,%t,%t,%t,%f,%.2f,%.2f,%t,%t,%d\n", timeFromStart.Nanoseconds(), r.Segment, r.Tile, r.Priority, latency.Nanoseconds(), timedOut, skipped, ok, tp, bufferSec, tileMissingRatio, inFOV, onTime, int(r.Bitrate))
+	row := fmt.Sprintf("%d,%d,%d,%d,%d,%t,%t,%t,%f,%.2f,%.2f,%t,%t,%d,%d\n", timeFromStart.Nanoseconds(), r.Segment, r.Tile, r.Priority, latency.Nanoseconds(), timedOut, skipped, ok, tp, bufferSec, tileMissingRatio, inFOV, onTime, int(r.Bitrate), requestOrder)
 	if _, err := s.fileWriter.WriteString(row); err != nil {
 		log.Panicf("Failed to write: %s\n", err)
 	}
