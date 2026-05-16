@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
+# Depends on: ./server_scheduler_test.sh, resources/server_scheduler_test.py, resources/utils.py,
+#             resources/analyze_bola_legacy_extremes.py (after runs).
+#
 # Quick Mininet comparison: BOLA vs Legacy under two extreme network conditions.
+#
 # Uses existing dataset as-is (including reps 5/10/15 when already present).
 #
 # Runs:
@@ -63,8 +67,6 @@ CONDITIONS=(
 ABRS=(bola legacy)
 SCHEDULER="wfq"
 SERVER_BW=200
-
-export SKIP_LOCAL_PLOTS="${SKIP_LOCAL_PLOTS:-1}"
 
 run_idx=0
 for condition_spec in "${CONDITIONS[@]}"; do

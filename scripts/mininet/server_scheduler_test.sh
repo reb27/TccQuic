@@ -18,7 +18,6 @@ showUsage() {
     echo "--fov NAME              Select FoV trace: narrow, normal, wide"
     echo "-o DIR                  Select output directory"
     echo "--no-build              Skip compile & upload (reuse existing remote binary)"
-    echo "--no-local-plots        Skip plot_server_scheduler_test_results.py (saves time; CSVs still downloaded)"
 }
 
 SERVER_MODE="wfq"
@@ -32,8 +31,6 @@ LOAD="10"
 BASE_LATENCY="700"
 FOV_MODE="normal"
 NO_BUILD=0
-# 1 = não gerar PNGs locais por corrida (matriz ABR usa plot_tile_missing_ratio no fim)
-SKIP_LOCAL_PLOTS="${SKIP_LOCAL_PLOTS:-0}"
 IP=
 LOG_DIR=
 
@@ -53,7 +50,6 @@ while [[ "$#" > 0 ]]; do
     --fov)   FOV_MODE="$2"                  ; shift 2 ;;
     -o)     LOG_DIR="$2"                    ; shift 2 ;;
     --no-build) NO_BUILD=1                  ; shift   ;;
-    --no-local-plots) SKIP_LOCAL_PLOTS=1   ; shift   ;;
     -*)     showUsage ; exit 1              ; shift   ;;
     *)      IP="$1"                         ; shift   ;;
     esac
@@ -209,18 +205,6 @@ TEE_RC=${PIPE_RC[1]:-0}
 echo -e "${PURPLE}Exit codes: ssh/python=$PY_RC tee=$TEE_RC${NC}"
 
 download "$REMOTE_DIR/*.csv" "$LOG_DIR" || true
-
-shopt -s nullglob
-CSV_FILES=( "$LOG_DIR"/*.csv )
-shopt -u nullglob
-if [[ "$SKIP_LOCAL_PLOTS" == "1" ]]; then
-    echo -e "${PURPLE}SKIP_LOCAL_PLOTS=1 — omitindo plot_server_scheduler_test_results.py${NC}"
-elif ((${#CSV_FILES[@]} > 0)); then
-    resources/plot_server_scheduler_test_results.py "${CSV_FILES[@]}" "$LOG_DIR" \
-        || echo -e "${PURPLE}[warn] plot_server_scheduler_test_results.py falhou (ignorado).${NC}"
-else
-    echo -e "${PURPLE}[warn] Sem CSV em $LOG_DIR — plot local ignorado.${NC}"
-fi
 
 echo -e "${PURPLE}Logs: $(cd "$LOG_DIR" && pwd)${NC}"
 exit "$PY_RC"
