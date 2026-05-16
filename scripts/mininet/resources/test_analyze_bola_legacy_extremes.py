@@ -88,9 +88,10 @@ class TestAnalyzeBolaLegacyExtremes(unittest.TestCase):
             self.assertEqual(rows[0]["low_req_near_fov"], 0)
             self.assertEqual(rows[0]["total_req_nonfov_rows"], 2)
             self.assertEqual(rows[0]["low_req_nonfov"], 0)
-            self.assertEqual(r0["delivered_ok_fov"], 1)
-            self.assertEqual(r0["delivered_ok_near_fov"], 1)
-            self.assertEqual(r0["delivered_ok_outside_fov"], 0)
+            self.assertEqual(r0["delivered_ok_fov_low"], 1)
+            self.assertEqual(r0["delivered_ok_near_fov_med"], 1)
+            self.assertEqual(r0["delivered_ok_fov_med"], 0)
+            self.assertEqual(r0["delivered_ok_fov_high"], 0)
             self.assertEqual(
                 r0["delivered_ok_fov"]
                 + r0["delivered_ok_near_fov"]

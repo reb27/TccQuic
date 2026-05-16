@@ -14,7 +14,7 @@
 #   - abr_extremes_summary.csv
 #   - abr_extremes_quality.png
 #   - abr_extremes_dashboard.png
-#   - abr_extremes_spatial_mix.png (ok=true: barras agrupadas FoV/perto/fundo, contagens + eixo log)
+#   - abr_extremes_spatial_mix.png (3 zonas; barras agrupadas LOW/MED/HIGH por cenário)
 #   - abr_extremes_delivered_counts.png
 #
 # Usage:

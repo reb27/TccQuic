@@ -14,7 +14,7 @@ Outputs:
   - <LOG_ROOT>/abr_extremes_summary.csv (fov_mode; zone_*; total_req_nonfov_rows; low_req_* e low_req_nonfov)
   - <LOG_ROOT>/abr_extremes_quality.png
   - <LOG_ROOT>/abr_extremes_dashboard.png (3 painéis)
-  - <LOG_ROOT>/abr_extremes_spatial_mix.png (contagens ok=true por zona FoV/perto/fundo; barras agrupadas + escala log)
+  - <LOG_ROOT>/abr_extremes_spatial_mix.png (ok=true: 3 zonas; por cenário, barras agrupadas LOW/MED/HIGH)
   - <LOG_ROOT>/abr_extremes_delivered_counts.png
 
 Com --spatial-mix-only, só o spatial_mix.png é escrito (CSV e demais PNGs não).
@@ -203,6 +203,26 @@ def _delivered_spatial_counts(m: dict) -> dict:
     }
 
 
+def _delivered_ok_zone_bitrate_fields(m: dict) -> dict:
+    """Contagens ok=true por (zona espacial, bitrate): colunas delivered_ok_<zone>_<low|med|high>."""
+    tier = {3: "low", 5: "med", 10: "high"}
+    out: dict = {}
+    for zone in SPATIAL_ORDER:
+        for br in BITRATE_ORDER:
+            name = tier[br]
+            out[f"delivered_ok_{zone}_{name}"] = int(m["ok_bitrate_counts_spatial"][zone].get(br, 0))
+    return out
+    """Contagens com ok=true por zona (qualquer bitrate registrado no CSV)."""
+    fov = sum(m["ok_bitrate_counts_spatial"]["fov"].values())
+    near = sum(m["ok_bitrate_counts_spatial"]["near_fov"].values())
+    out = sum(m["ok_bitrate_counts_spatial"]["outside_fov"].values())
+    return {
+        "delivered_ok_fov": int(fov),
+        "delivered_ok_near_fov": int(near),
+        "delivered_ok_outside_fov": int(out),
+    }
+
+
 def _low_request_counts(m: dict) -> dict:
     """Contagens exatas de requisições com bitrate LOW por zona espacial."""
     out = {
@@ -258,6 +278,7 @@ def write_summary_csv(data: dict, out_csv: str, *, write_disk: bool = True) -> l
                 "delivered_high_count": int(m["ok_bitrate_counts"].get(10, 0)),
             }
             item.update(_delivered_spatial_counts(m))
+            item.update(_delivered_ok_zone_bitrate_fields(m))
             item.update(_spatial_summary_fields(m))
             item.update(_mix_zone_of_total_fields(m))
             item.update(_low_request_counts(m))
@@ -284,12 +305,22 @@ def write_summary_csv(data: dict, out_csv: str, *, write_disk: bool = True) -> l
         "delivered_ok_fov",
         "delivered_ok_near_fov",
         "delivered_ok_outside_fov",
-        "low_req_total",
-        "low_req_fov",
-        "low_req_near_fov",
-        "low_req_outside_fov",
-        "low_req_nonfov",
     ]
+    tier_names = {3: "low", 5: "med", 10: "high"}
+    zone_bitrate_fields: list[str] = []
+    for zone in SPATIAL_ORDER:
+        for br in BITRATE_ORDER:
+            zone_bitrate_fields.append(f"delivered_ok_{zone}_{tier_names[br]}")
+    base_fields.extend(zone_bitrate_fields)
+    base_fields.extend(
+        [
+            "low_req_total",
+            "low_req_fov",
+            "low_req_near_fov",
+            "low_req_outside_fov",
+            "low_req_nonfov",
+        ]
+    )
     spatial_fields: list[str] = []
     for zone in SPATIAL_ORDER:
         pref = f"zone_{zone}_"
@@ -485,9 +516,9 @@ def plot_dashboard(rows: list[dict], out_path: str) -> None:
 
 def plot_spatial_mix(rows: list[dict], out_path: str) -> None:
     """
-    Barras agrupadas por cenário: contagem de entregas ok=true em cada zona
-    (FoV / perto / fundo), qualquer bitrate. Eixo Y em log para não esmagar
-    FoV/perto quando o fundo domina (cenário típico do dataset).
+    Três faixas (FoV / perto / fundo). Em cada uma: por cenário de rede×ABR,
+    três barras lado a lado (LOW, MED, HIGH) — contagens ok=true. Eixo Y próprio
+    por faixa. Legenda à direita da figura; números só por cima das barras (>0).
     """
     import matplotlib.pyplot as plt
     import numpy as np
@@ -497,185 +528,95 @@ def plot_spatial_mix(rows: list[dict], out_path: str) -> None:
         return
 
     row_map = {(r["condition"], r["abr"]): r for r in rows}
-    bar_short = ("Boa / BOLA", "Boa / Legacy", "Ruim / BOLA", "Ruim / Legacy")
-    abb = ("BB", "BL", "RB", "RL")
-
-    zone_style = {
-        "fov": ("FoV", "#14b8a6"),
-        "near_fov": ("Perto do FoV", "#f59e0b"),
-        "outside_fov": ("Fundo", "#64748b"),
-    }
-
     keys: list[tuple[str, str]] = []
     for cond in CONDITION_ORDER:
         for abr in ABR_ORDER:
             keys.append((cond, abr))
 
-    def _zone_counts(r: dict | None) -> tuple[int, int, int, int]:
-        if not r:
-            return (0, 0, 0, 0)
-        cv = int(r.get("delivered_ok_fov", 0) or 0)
-        cn = int(r.get("delivered_ok_near_fov", 0) or 0)
-        co = int(r.get("delivered_ok_outside_fov", 0) or 0)
-        ct = cv + cn + co
-        return (cv, cn, co, ct)
+    tier_key = {3: "low", 5: "med", 10: "high"}
+    tier_plot = (
+        (3, "LOW", "#2563eb"),
+        (5, "MED", "#ca8a04"),
+        (10, "HIGH", "#15803d"),
+    )
+    bar_short = ("Boa+BOLA", "Boa+Legacy", "Ruim+BOLA", "Ruim+Legacy")
+    zone_title = {
+        "fov": "Dentro do FoV",
+        "near_fov": "Perto do FoV",
+        "outside_fov": "Fundo (fora)",
+    }
 
-    fig = plt.figure(figsize=(12.2, 7.2))
-    gs = fig.add_gridspec(2, 1, height_ratios=[3.45, 1.12], hspace=0.30)
-    ax = fig.add_subplot(gs[0, 0])
-    ax_tbl = fig.add_subplot(gs[1, 0])
-    ax_tbl.axis("off")
+    n_bar = len(keys)
+    x = np.arange(n_bar, dtype=float)
+    w = 0.21
 
-    n = len(keys)
-    x = np.arange(n, dtype=float)
-    n_z = len(SPATIAL_ORDER)
-    group_w = 0.72
-    bar_w = group_w / n_z
-    offsets = (np.arange(n_z, dtype=float) - (n_z - 1) / 2.0) * bar_w
+    fig, axes = plt.subplots(len(SPATIAL_ORDER), 1, figsize=(13.5, 10.2), sharex=True)
+    if len(SPATIAL_ORDER) == 1:
+        axes = [axes]
 
-    max_pos = 1.0
-    for cond, abr in keys:
-        cv, cn, co, _ = _zone_counts(row_map.get((cond, abr)))
-        for v in (cv, cn, co):
-            if v > max_pos:
-                max_pos = float(v)
-
-    for zi, zone in enumerate(SPATIAL_ORDER):
-        lbl, color = zone_style[zone]
-        counts = []
-        for cond, abr in keys:
-            r = row_map.get((cond, abr))
-            cv, cn, co, _ = _zone_counts(r)
-            czone = {"fov": cv, "near_fov": cn, "outside_fov": co}[zone]
-            counts.append(czone)
-        c_arr = np.array(counts, dtype=float)
-        plot_h = np.where(c_arr > 0, c_arr, np.nan)
-        ax.bar(
-            x + offsets[zi],
-            plot_h,
-            bar_w * 0.92,
-            label=lbl,
-            color=color,
-            edgecolor="#0f172a",
-            linewidth=0.65,
-        )
-        for j, raw in enumerate(c_arr):
-            ri = int(raw)
-            if ri <= 0:
-                continue
-            y_txt = float(raw) * 1.12
-            ax.text(
-                float(x[j] + offsets[zi]),
-                y_txt,
-                f"{ri:,}".replace(",", "."),
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                fontweight="bold",
-                color="#0f172a",
+    for row_ax, zone in zip(axes, SPATIAL_ORDER):
+        ymax = 1.0
+        for zi, (br, lbl, color) in enumerate(tier_plot):
+            offs = (zi - 1.0) * w
+            heights = []
+            for cond, abr in keys:
+                r = row_map.get((cond, abr))
+                k = f"delivered_ok_{zone}_{tier_key[br]}"
+                heights.append(float(int(r.get(k, 0) or 0)) if r else 0.0)
+            hs = np.array(heights, dtype=float)
+            bars = row_ax.bar(
+                x + offs,
+                hs,
+                w * 0.92,
+                label=lbl,
+                color=color,
+                edgecolor="#111827",
+                linewidth=0.55,
             )
+            lbls = [str(int(h)) if h > 0 else "" for h in hs]
+            row_ax.bar_label(bars, labels=lbls, fontsize=8, padding=2, color="#1e293b", fontweight="bold")
+            mh = float(np.max(hs)) if len(hs) else 0.0
+            if mh > ymax:
+                ymax = mh
 
-    mismatch_note = False
-    xt_lbl = []
-    for j, (cond, abr) in enumerate(keys):
-        r = row_map.get((cond, abr))
-        ok_rows = int(r["ok_rows"]) if r else 0
-        _, _, _, ct = _zone_counts(r)
-        if r and ct != ok_rows:
-            mismatch_note = True
-        xt_lbl.append(f"{bar_short[j]}\n(ok=true total {ok_rows})")
+        row_ax.set_ylim(0, max(ymax * 1.18, 6.0))
+        row_ax.set_ylabel("Entregas ok=true", fontsize=10)
+        row_ax.set_title(zone_title[zone], fontsize=11.5, fontweight="bold", loc="left")
+        row_ax.grid(axis="y", linestyle="--", alpha=0.3)
+        row_ax.set_axisbelow(True)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(xt_lbl, fontsize=10)
-    ax.set_ylabel("Quantidade entregue (ok=true), escala log₁₀", fontsize=11)
-    ax.set_yscale("log")
-    ax.set_ylim(0.35, max(max_pos * 2.2, 10.0))
-    y_lo, _y_hi = ax.get_ylim()
+    bottom_ax = axes[-1]
+    bottom_ax.set_xticks(x)
+    bottom_ax.set_xticklabels(bar_short, fontsize=10)
+    bottom_ax.tick_params(axis="x", pad=6)
 
-    for zi, _ in enumerate(SPATIAL_ORDER):
-        counts = []
-        for cond, abr in keys:
-            r = row_map.get((cond, abr))
-            cv, cn, co, _ = _zone_counts(r)
-            czone = {"fov": cv, "near_fov": cn, "outside_fov": co}[zone]
-            counts.append(czone)
-        for j, raw in enumerate(counts):
-            if raw > 0:
-                continue
-            ax.text(
-                float(x[j] + offsets[zi]),
-                y_lo * 1.35,
-                "0",
-                ha="center",
-                va="bottom",
-                fontsize=7.5,
-                color="#64748b",
-            )
-
-    ax.set_title(
-        "Entregas bem-sucedidas por zona espacial (contagem absoluta)\n"
-        + _fov_trace_caption(rows),
-        fontsize=12,
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.suptitle(
+        "Entregas ok=true por zona e bitrate (barras agrupadas)",
+        fontsize=13,
         fontweight="bold",
-        pad=10,
+        y=0.98,
     )
-    ax.grid(axis="y", linestyle="--", alpha=0.28)
-    ax.set_axisbelow(True)
-    ax.legend(
-        loc="lower center",
-        bbox_to_anchor=(0.5, 1.02),
-        ncol=3,
-        fontsize=9.5,
-        framealpha=0.95,
-        columnspacing=1.0,
+    fig.text(0.5, 0.935, _fov_trace_caption(rows), ha="center", fontsize=9, color="#475569")
+    fig.legend(
+        handles,
+        labels,
+        loc="center left",
+        bbox_to_anchor=(0.91, 0.52),
+        fontsize=10,
+        frameon=True,
+        fancybox=False,
+        edgecolor="#cbd5e1",
     )
-
-    for j in range(n):
-        r = row_map.get(keys[j])
-        _, _, _, ct = _zone_counts(r)
-        if r and ct <= 0:
-            ax.text(
-                float(x[j]),
-                y_lo * 1.6,
-                "sem entregas\nok neste run",
-                ha="center",
-                va="bottom",
-                fontsize=8.5,
-                color="#94a3b8",
-            )
-
-    tbl_headers = ["", "FoV", "Perto", "Fundo", "Σ zonas", "ok_rows"]
-    tbl_rows: list[list[str]] = []
-    for j, (cond, abr) in enumerate(keys):
-        r = row_map.get((cond, abr))
-        if not r:
-            continue
-        cv, cn, co, ct = _zone_counts(r)
-        ok_rows = int(r["ok_rows"])
-        tbl_rows.append([abb[j], str(cv), str(cn), str(co), str(ct), str(ok_rows)])
-
-    table = ax_tbl.table(
-        cellText=tbl_rows,
-        colLabels=tbl_headers,
-        loc="center",
-        cellLoc="center",
+    fig.text(
+        0.5,
+        0.02,
+        "Colunas de bitrate por cenário; valores detalhados: CSV (delivered_ok_<zona>_low|med|high).",
+        ha="center",
+        fontsize=8.5,
+        color="#64748b",
     )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1.06, 1.9)
-    for k in range(len(tbl_headers)):
-        table[(0, k)].set_facecolor("#e2e8f0")
-        table[(0, k)].set_text_props(fontweight="bold")
-
-    foot = (
-        "Contagens = tiles ok=true com bitrate válido, por zona. Σ zonas deve coincidir com ok_rows; "
-        "se diferir, há ok=true sem bitrate no CSV. Eixo log evita barra única dominante."
-    )
-    if mismatch_note:
-        foot += " Atenção: Σ zonas ≠ ok_rows em pelo menos um cenário."
-    fig.text(0.5, 0.02, foot, ha="center", fontsize=8.3, color="#64748b")
-
-    fig.subplots_adjust(left=0.09, right=0.97, top=0.78, bottom=0.13)
+    fig.subplots_adjust(left=0.07, right=0.88, top=0.90, bottom=0.10, hspace=0.34)
     _save_fig(fig, out_path)
 
 
