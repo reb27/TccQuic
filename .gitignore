@@ -14,7 +14,13 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+.venv/
 *.pem
 
 # Logs directory
 /logs
+scripts/mininet/logs/
+
+# Python cache
+__pycache__/
+*.py[cod]
