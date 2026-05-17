@@ -105,7 +105,9 @@ func BuildTileRequestPlan(segmentID int, cfg SegmentConfig, tiles []int, fovTrac
 }
 
 func (s *TileScheduler) ScheduleSegment(segmentID int, deadline time.Time, cfg SegmentConfig, tiles []int, fovTrace *fov.FOVTrace) {
-	for _, item := range BuildTileRequestPlan(segmentID, cfg, tiles, fovTrace) {
+	plan := BuildTileRequestPlan(segmentID, cfg, tiles, fovTrace)
+	s.collector.RegisterSegment(segmentID, len(plan))
+	for _, item := range plan {
 		s.sem.Acquire()
 		s.wg.Add(1)
 		go s.handleTile(segmentID, deadline, item)
@@ -143,7 +145,7 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 	fmt.Printf("Sending request for segment %d, tile %d (priority=%d, FOV=%t, order=%d)\n", segmentID, item.TileID, item.Priority, item.InFOV, item.RequestOrder)
 	s.firstRequestOnce.Do(func() { s.firstRequestTime = time.Now() })
 	sendBufferSec := s.playback.GetBufferLevel(int(s.lastDownloadedSegment.Load())).Seconds()
-	s.collector.RecordSend(request.ID)
+	s.collector.RecordSend(request.ID, segmentID)
 
 	requestTime := time.Since(s.startTime)
 	requestTimeout := remaining + staleMeasurementGrace
@@ -164,6 +166,7 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 	if response == nil {
 		fmt.Printf("Timeout: no response for segment %d, tile %d\n", segmentID, item.TileID)
 		timedOut = true
+		s.collector.RecordFailure(request.ID)
 	} else {
 		if len(response.Data) == 0 {
 			log.Panicf("Empty response for (%d, %d)", segmentID, item.TileID)
@@ -212,6 +215,7 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 }
 
 func (s *TileScheduler) registerTimeout(segmentID int, item TileRequestPlanItem, deadline time.Time) {
+	s.collector.RecordSkipped(segmentID)
 	lateness := time.Since(deadline)
 	if lateness < 0 {
 		lateness = 0

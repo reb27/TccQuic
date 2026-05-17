@@ -25,14 +25,16 @@ type EnvironmentConfig struct {
 	DeadlineLatenessPath         string
 	ClientQUICUplinkLossRatePath string
 	ABRMode                      string
+	BOLADebugPath                string
 }
 
 func ResolveEnvironmentConfig() EnvironmentConfig {
 	cfg := EnvironmentConfig{
-		Pipeline:     defaultPipeline,
-		FOVTracePath: getEnvOrDefault("FOV_TRACE_PATH", defaultFOVTracePath),
-		FOVTraceFPS:  getEnvInt("FOV_TRACE_FPS", defaultFOVTraceFPS),
-		ABRMode:      getEnvOrDefault("ABR_MODE", defaultABRMode),
+		Pipeline:      defaultPipeline,
+		FOVTracePath:  getEnvOrDefault("FOV_TRACE_PATH", defaultFOVTracePath),
+		FOVTraceFPS:   getEnvInt("FOV_TRACE_FPS", defaultFOVTraceFPS),
+		ABRMode:       getEnvOrDefault("ABR_MODE", defaultABRMode),
+		BOLADebugPath: os.Getenv("BOLA_DEBUG_PATH"),
 	}
 
 	pid := os.Getpid()

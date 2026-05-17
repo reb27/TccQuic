@@ -1,9 +1,7 @@
 // Package netstats implementa um módulo independente para medir
-// atraso (latência) e vazão (throughput) das transferências de tiles.
+// atraso (latência) de tiles e vazão agregada por segmento.
 // Ele não conhece detalhes de QUIC, buffer ou ABR: apenas registra quando
 // cada requisição saiu e quando a resposta chegou.
-// Se outros módulos mudarem, desde que ainda chamem RecordSend/RecordRecv
-// com o mesmo ID, este código continua funcionando.
 package netstats
 
 import (
@@ -26,34 +24,63 @@ type StatEntry struct {
 	Bytes  int
 	Delay  time.Duration
 	TP     float64
+
+	Segment int
 }
 
-// StatsCollector agrega várias StatEntry e mantém uma janela circular
-// com as últimas "window" medições de vazão para calcular a média.
-// zero dependencies externas além da biblioteca padrão.
+type segmentEntry struct {
+	expected    int
+	completed   int
+	totalBytes  int
+	firstSentAt time.Time
+	lastDoneAt  time.Time
+	finalized   bool
+}
+
+const ewmaAlpha = 0.35
+
+// StatsCollector agrega várias StatEntry e mantém uma estimativa EWMA da vazão
+// agregada por segmento completo.
 type StatsCollector struct {
-	mu      sync.Mutex
-	pending map[uuid.UUID]*StatEntry // requisições pendentes (ainda sem resposta)
-	window  []float64                // vazões recentes
-	idx     int                      // ponteiro de inserção (cresce para sempre)
+	mu       sync.Mutex
+	pending  map[uuid.UUID]*StatEntry
+	segments map[int]*segmentEntry
+	ewma     float64
+	hasEWMA  bool
 }
 
-// New cria um coletor com janela "window" (>=1) medições.
+// New cria um coletor de métricas. O parâmetro window é mantido para
+// compatibilidade com os chamadores existentes; a média do ABR agora é EWMA.
 func New(window int) *StatsCollector {
-	if window < 1 {
-		window = 1
-	}
 	return &StatsCollector{
-		pending: make(map[uuid.UUID]*StatEntry),
-		window:  make([]float64, window),
+		pending:  make(map[uuid.UUID]*StatEntry),
+		segments: make(map[int]*segmentEntry),
+	}
+}
+
+// RegisterSegment informa quantos tiles fazem parte da rodada de download de
+// um segmento.
+func (sc *StatsCollector) RegisterSegment(segmentID int, expectedTiles int) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	seg := sc.segment(segmentID)
+	if expectedTiles > seg.expected {
+		seg.expected = expectedTiles
 	}
 }
 
 // RecordSend deve ser chamado assim que a requisição ID sair.
-func (sc *StatsCollector) RecordSend(id uuid.UUID) {
+func (sc *StatsCollector) RecordSend(id uuid.UUID, segmentID int) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.pending[id] = &StatEntry{SentAt: time.Now()}
+
+	sentAt := time.Now()
+	sc.pending[id] = &StatEntry{SentAt: sentAt, Segment: segmentID}
+	seg := sc.segment(segmentID)
+	if seg.firstSentAt.IsZero() || sentAt.Before(seg.firstSentAt) {
+		seg.firstSentAt = sentAt
+	}
 }
 
 // RecordRecv deve ser chamado quando a resposta do mesmo ID chegar.
@@ -69,33 +96,48 @@ func (sc *StatsCollector) RecordRecv(id uuid.UUID, bytes int) (delay time.Durati
 		return 0, 0
 	}
 
-	entry.RecvAt = time.Now()
+	recvAt := time.Now()
+	entry.RecvAt = recvAt
 	entry.Bytes = bytes
 	entry.Delay = entry.RecvAt.Sub(entry.SentAt)
 	if entry.Delay > 0 {
 		entry.TP = float64(bytes) / entry.Delay.Seconds()
 	}
 
-	// grava vazão na janela circular
-	sc.window[sc.idx%len(sc.window)] = entry.TP
-	sc.idx++
-
-	// remove do mapa para não crescer sem limite
 	delete(sc.pending, id)
+	sc.completeTile(entry.Segment, bytes, recvAt)
 
 	return entry.Delay, entry.TP
 }
 
-// AvgThroughput devolve a média simples das vazões na janela.
+// RecordFailure marca uma requisição enviada como concluída sem bytes.
+func (sc *StatsCollector) RecordFailure(id uuid.UUID) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	entry, ok := sc.pending[id]
+	if !ok {
+		return
+	}
+	delete(sc.pending, id)
+	sc.completeTile(entry.Segment, 0, time.Now())
+}
+
+// RecordSkipped marca um tile que não chegou a ser enviado.
+func (sc *StatsCollector) RecordSkipped(segmentID int) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	sc.completeTile(segmentID, 0, time.Now())
+}
+
+// AvgThroughput devolve a estimativa EWMA da vazão agregada por segmento, em
+// bytes por segundo.
 func (sc *StatsCollector) AvgThroughput() float64 {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	sum := 0.0
-	for _, v := range sc.window {
-		sum += v
-	}
-	return sum / float64(len(sc.window))
+	return sc.ewma
 }
 
 // Pending retorna quantas requisições ainda não receberam resposta.
@@ -104,4 +146,43 @@ func (sc *StatsCollector) Pending() int {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	return len(sc.pending)
+}
+
+func (sc *StatsCollector) segment(segmentID int) *segmentEntry {
+	seg, ok := sc.segments[segmentID]
+	if !ok {
+		seg = &segmentEntry{}
+		sc.segments[segmentID] = seg
+	}
+	return seg
+}
+
+func (sc *StatsCollector) completeTile(segmentID int, bytes int, doneAt time.Time) {
+	seg := sc.segment(segmentID)
+	seg.completed++
+	if bytes > 0 {
+		seg.totalBytes += bytes
+	}
+	if seg.lastDoneAt.IsZero() || doneAt.After(seg.lastDoneAt) {
+		seg.lastDoneAt = doneAt
+	}
+	sc.finalizeSegmentIfComplete(seg)
+}
+
+func (sc *StatsCollector) finalizeSegmentIfComplete(seg *segmentEntry) {
+	if seg.finalized || seg.expected <= 0 || seg.completed < seg.expected {
+		return
+	}
+	seg.finalized = true
+	elapsed := seg.lastDoneAt.Sub(seg.firstSentAt)
+	if seg.totalBytes <= 0 || elapsed <= 0 {
+		return
+	}
+	throughput := float64(seg.totalBytes) / elapsed.Seconds()
+	if !sc.hasEWMA {
+		sc.ewma = throughput
+		sc.hasEWMA = true
+		return
+	}
+	sc.ewma = ewmaAlpha*throughput + (1.0-ewmaAlpha)*sc.ewma
 }

@@ -45,6 +45,7 @@ type Environment struct {
 	DeadlineLatenessPath         string
 	ClientQUICUplinkLossRatePath string
 	ABRMode                      string
+	BOLADebugPath                string
 }
 
 type TestSession struct {
@@ -135,9 +136,9 @@ func (s *TestSession) segmentIDsInOrder() []int {
 }
 
 func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
-	avgThroughput := s.collector.AvgThroughput()
 	bufferLevel := s.playback.GetBufferLevel(int(s.lastDownloadedSegment.Load()))
 	s.playback.WaitUntilWithinPrefetchWindow(segmentID)
+	avgThroughput := s.collector.AvgThroughput()
 	timeBudget := s.playback.GetTimeToReceive(segmentID)
 	if timeBudget <= 0 {
 		timeBudget = s.opts.SegmentDuration

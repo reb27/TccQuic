@@ -33,6 +33,7 @@ FOV_MODE="normal"
 NO_BUILD=0
 IP=
 LOG_DIR=
+BOLA_DEBUG_PATH="${BOLA_DEBUG_PATH:-}"
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
@@ -190,6 +191,7 @@ delay_ms=$DELAY
 background_load_pct=$LOAD
 base_latency_ms=$BASE_LATENCY
 fov_mode=$FOV_MODE
+BOLA_DEBUG_PATH=$BOLA_DEBUG_PATH
 EOF
 fi
 
@@ -197,7 +199,7 @@ withSSH "cd $REMOTE_DIR && \
         sudo env SERVER_MODE='$SERVER_MODE' ABR_MODE='$ABR_MODE' SERVER_BW='$SERVER_BW' \
             CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
-            FOV_TRACE_PATH='$FOV_TRACE_PATH' \
+            FOV_TRACE_PATH='$FOV_TRACE_PATH' BOLA_DEBUG_PATH='$BOLA_DEBUG_PATH' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 PIPE_RC=( "${PIPESTATUS[@]}" )
 PY_RC=${PIPE_RC[0]:-1}

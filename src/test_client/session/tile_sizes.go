@@ -4,11 +4,19 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+
+	"main/src/model"
 )
 
+type tileSizeKey struct {
+	tileID  int
+	bitrate model.Bitrate
+}
+
 type TileSizeEstimator struct {
-	byTile    map[int]int64
-	globalAvg int64
+	byTileBitrate map[tileSizeKey]int64
+	byBitrateAvg  map[model.Bitrate]int64
+	globalAvg     int64
 }
 
 var tileSizeFilePattern = regexp.MustCompile(`^video_tiled_(\d+)_dash_track(\d+)_(\d+)\.m4s$`)
@@ -19,8 +27,10 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 		return nil, err
 	}
 
-	sums := make(map[int]int64)
-	counts := make(map[int]int64)
+	sums := make(map[tileSizeKey]int64)
+	counts := make(map[tileSizeKey]int64)
+	bitrateSums := make(map[model.Bitrate]int64)
+	bitrateCounts := make(map[model.Bitrate]int64)
 	var totalSize int64
 	var totalCount int64
 
@@ -38,8 +48,8 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 		if _, err := fmt.Sscanf(m[1], "%d", &rep); err != nil {
 			continue
 		}
-		// Keep estimator baseline aligned with original dataset behavior.
-		if rep != 10 {
+		bitrate, ok := bitrateForRepresentation(rep)
+		if !ok {
 			continue
 		}
 		var tileID int
@@ -51,17 +61,28 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 			continue
 		}
 		size := info.Size()
-		sums[tileID] += size
-		counts[tileID]++
+		key := tileSizeKey{tileID: tileID, bitrate: bitrate}
+		sums[key] += size
+		counts[key]++
+		bitrateSums[bitrate] += size
+		bitrateCounts[bitrate]++
 		totalSize += size
 		totalCount++
 	}
 
-	byTile := make(map[int]int64, len(sums))
-	for tileID, sum := range sums {
-		count := counts[tileID]
+	byTileBitrate := make(map[tileSizeKey]int64, len(sums))
+	for key, sum := range sums {
+		count := counts[key]
 		if count > 0 {
-			byTile[tileID] = sum / count
+			byTileBitrate[key] = sum / count
+		}
+	}
+
+	byBitrateAvg := make(map[model.Bitrate]int64, len(bitrateSums))
+	for bitrate, sum := range bitrateSums {
+		count := bitrateCounts[bitrate]
+		if count > 0 {
+			byBitrateAvg[bitrate] = sum / count
 		}
 	}
 
@@ -74,24 +95,42 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 	}
 
 	return &TileSizeEstimator{
-		byTile:    byTile,
-		globalAvg: globalAvg,
+		byTileBitrate: byTileBitrate,
+		byBitrateAvg:  byBitrateAvg,
+		globalAvg:     globalAvg,
 	}, nil
 }
 
 func NewFallbackTileSizeEstimator() *TileSizeEstimator {
 	return &TileSizeEstimator{
-		byTile:    map[int]int64{},
-		globalAvg: 1,
+		byTileBitrate: map[tileSizeKey]int64{},
+		byBitrateAvg:  map[model.Bitrate]int64{},
+		globalAvg:     1,
 	}
 }
 
-func (t *TileSizeEstimator) AvgSize(tileID int) int64 {
+func (t *TileSizeEstimator) AvgSize(tileID int, bitrate model.Bitrate) int64 {
 	if t == nil {
 		return 0
 	}
-	if v, ok := t.byTile[tileID]; ok && v > 0 {
+	if v, ok := t.byTileBitrate[tileSizeKey{tileID: tileID, bitrate: bitrate}]; ok && v > 0 {
+		return v
+	}
+	if v, ok := t.byBitrateAvg[bitrate]; ok && v > 0 {
 		return v
 	}
 	return t.globalAvg
+}
+
+func bitrateForRepresentation(rep int) (model.Bitrate, bool) {
+	switch rep {
+	case 5:
+		return model.LOW_BITRATE, true
+	case 10:
+		return model.MEDIUM_BITRATE, true
+	case 15:
+		return model.HIGH_BITRATE, true
+	default:
+		return 0, false
+	}
 }

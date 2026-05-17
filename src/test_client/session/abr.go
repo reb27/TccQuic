@@ -58,12 +58,12 @@ func SelectABRController(env Environment) ABRController {
 	mode := strings.ToLower(strings.TrimSpace(env.ABRMode))
 	switch mode {
 	case "", "bola", "bola_finite", "bolafinite":
-		return NewBOLAFiniteABR()
+		return NewBOLAFiniteABR(env.BOLADebugPath)
 	case "default", "legacy", "threshold":
 		return NewDefaultABRController()
 	default:
 		log.Printf("Unknown ABR_MODE=%q, defaulting to BOLA", env.ABRMode)
-		return NewBOLAFiniteABR()
+		return NewBOLAFiniteABR(env.BOLADebugPath)
 	}
 }
 

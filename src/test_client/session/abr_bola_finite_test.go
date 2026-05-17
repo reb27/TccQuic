@@ -1,6 +1,9 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,20 +16,22 @@ type fakeSizeProvider struct {
 	size int64
 }
 
-func (f fakeSizeProvider) AvgSize(tileID int) int64 {
+func (f fakeSizeProvider) AvgSize(tileID int, bitrate model.Bitrate) int64 {
 	return f.size
 }
 
-// mapTileSizeProvider simula tamanhos médios por tile (ex.: rep. base 10 no
-// dataset real), útil para cenários com massa variável entre tiles / FoV.
+// mapTileSizeProvider simula tamanhos medios por tile e bitrate, como o
+// dataset real apos o mapeamento LOW->rep5, MEDIUM->rep10, HIGH->rep15.
 type mapTileSizeProvider struct {
-	byTile   map[int]int64
+	byTile   map[int]map[model.Bitrate]int64
 	fallback int64
 }
 
-func (m mapTileSizeProvider) AvgSize(tileID int) int64 {
-	if v, ok := m.byTile[tileID]; ok && v > 0 {
-		return v
+func (m mapTileSizeProvider) AvgSize(tileID int, bitrate model.Bitrate) int64 {
+	if byBitrate, ok := m.byTile[tileID]; ok {
+		if v, ok := byBitrate[bitrate]; ok && v > 0 {
+			return v
+		}
 	}
 	if m.fallback > 0 {
 		return m.fallback
@@ -90,7 +95,7 @@ func TestBolaWithVariableTileMassesTable(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		tileSizes     map[int]int64
+		tileSizes     map[int]map[model.Bitrate]int64
 		fov           []int
 		all           []int
 		buffer        time.Duration
@@ -100,8 +105,23 @@ func TestBolaWithVariableTileMassesTable(t *testing.T) {
 	}{
 		{
 			name: "fov_pesado_buffer_curto_ainda_sobe_qualidade",
-			tileSizes: map[int]int64{
-				1: 12000, 2: 8000, 3: 400, 4: 200,
+			tileSizes: map[int]map[model.Bitrate]int64{
+				1: {
+					model.LOW_BITRATE:    7000,
+					model.MEDIUM_BITRATE: 12000,
+					model.HIGH_BITRATE:   16000,
+				},
+				2: {
+					model.LOW_BITRATE:    5000,
+					model.MEDIUM_BITRATE: 8000,
+					model.HIGH_BITRATE:   11000,
+				},
+				3: {
+					model.LOW_BITRATE: 400,
+				},
+				4: {
+					model.LOW_BITRATE: 200,
+				},
 			},
 			fov:           []int{1, 2},
 			all:           []int{1, 2, 3, 4},
@@ -112,8 +132,23 @@ func TestBolaWithVariableTileMassesTable(t *testing.T) {
 		},
 		{
 			name: "mesma_heterogeneidade_orcamento_apertado_fica_em_low",
-			tileSizes: map[int]int64{
-				1: 12000, 2: 8000, 3: 400, 4: 200,
+			tileSizes: map[int]map[model.Bitrate]int64{
+				1: {
+					model.LOW_BITRATE:    7000,
+					model.MEDIUM_BITRATE: 12000,
+					model.HIGH_BITRATE:   16000,
+				},
+				2: {
+					model.LOW_BITRATE:    5000,
+					model.MEDIUM_BITRATE: 8000,
+					model.HIGH_BITRATE:   11000,
+				},
+				3: {
+					model.LOW_BITRATE: 400,
+				},
+				4: {
+					model.LOW_BITRATE: 200,
+				},
 			},
 			fov:           []int{1, 2},
 			all:           []int{1, 2, 3, 4},
@@ -124,14 +159,29 @@ func TestBolaWithVariableTileMassesTable(t *testing.T) {
 		},
 		{
 			name: "tiles_leves_guardrail_escolhe_med_high_nao_cabe",
-			tileSizes: map[int]int64{
-				1: 400, 2: 300, 3: 500, 4: 500,
+			tileSizes: map[int]map[model.Bitrate]int64{
+				1: {
+					model.LOW_BITRATE:    100,
+					model.MEDIUM_BITRATE: 150,
+					model.HIGH_BITRATE:   250,
+				},
+				2: {
+					model.LOW_BITRATE:    100,
+					model.MEDIUM_BITRATE: 150,
+					model.HIGH_BITRATE:   250,
+				},
+				3: {
+					model.LOW_BITRATE: 100,
+				},
+				4: {
+					model.LOW_BITRATE: 100,
+				},
 			},
 			fov:           []int{1, 2},
 			all:           []int{1, 2, 3, 4},
 			buffer:        900 * time.Millisecond,
 			timeBudget:    1 * time.Millisecond,
-			avgThroughput: 2_800_000,
+			avgThroughput: 600_000,
 			wantID:        "B_fov_med",
 		},
 	}
@@ -149,4 +199,36 @@ func TestBolaWithVariableTileMassesTable(t *testing.T) {
 				tt.fov, tt.all, tt.buffer, tt.timeBudget)
 		})
 	}
+}
+
+func TestBolaDebugCSVWritesHeaderAndRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bola-debug.csv")
+	abr := newBolaFiniteABRWithEstimator(fakeSizeProvider{size: 100}, path)
+	ctx := SegmentContext{
+		SegmentID:       7,
+		FirstSegment:    1,
+		LastSegment:     10,
+		SegmentDuration: time.Second,
+		TimeBudget:      2 * time.Second,
+		AvgThroughput:   1024,
+		BufferLevel:     time.Second,
+		FOVTiles:        []int{1},
+		AllTiles:        []int{1, 2},
+	}
+
+	abr.SelectConfig(ctx)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	require.Len(t, lines, 2)
+	require.Equal(t, "segment,cfg_before_guardrail,cfg_after_guardrail,avg_tp_bps,avg_tp_kib_s,time_budget_s,budget_bytes,size_low_bytes,size_med_bytes,size_high_bytes,guardrail,buffer_s,score_low,score_med,score_high", lines[0])
+
+	fields := strings.Split(lines[1], ",")
+	require.Len(t, fields, 15)
+	require.Equal(t, "7", fields[0])
+	require.Equal(t, "1024.000000", fields[3])
+	require.Equal(t, "1.000000", fields[4])
+	require.Equal(t, "2.000000", fields[5])
+	require.Equal(t, "2048.000000", fields[6])
 }
