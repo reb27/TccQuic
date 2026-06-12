@@ -11,6 +11,8 @@ import (
 	"main/src/model"
 )
 
+const defaultBOLAQmaxSegments = 5.0
+
 type bolaFiniteABR struct {
 	sizeProvider TileSizeProvider
 	qmaxSegments float64
@@ -32,16 +34,20 @@ type TileSizeProvider interface {
 	AvgSize(tileID int, bitrate model.Bitrate) int64
 }
 
-func NewBOLAFiniteABR(debugPath string) ABRController {
+func NewBOLAFiniteABR(debugPath string, qmaxSegments int) ABRController {
 	estimator, err := NewTileSizeEstimator("data/segments")
 	if err != nil {
 		log.Printf("BOLA ABR: failed to build tile size estimator: %v (using fallback)", err)
 		estimator = NewFallbackTileSizeEstimator()
 	}
-	return newBolaFiniteABRWithEstimator(estimator, debugPath)
+	return newBolaFiniteABRWithEstimatorAndQmax(estimator, float64(qmaxSegments), debugPath)
 }
 
 func newBolaFiniteABRWithEstimator(estimator TileSizeProvider, debugPath ...string) ABRController {
+	return newBolaFiniteABRWithEstimatorAndQmax(estimator, defaultBOLAQmaxSegments, debugPath...)
+}
+
+func newBolaFiniteABRWithEstimatorAndQmax(estimator TileSizeProvider, qmaxSegments float64, debugPath ...string) ABRController {
 	var logger *bolaDebugLogger
 	if len(debugPath) > 0 && debugPath[0] != "" {
 		var err error
@@ -50,9 +56,13 @@ func newBolaFiniteABRWithEstimator(estimator TileSizeProvider, debugPath ...stri
 			log.Printf("BOLA ABR: failed to open debug CSV %s: %v", debugPath[0], err)
 		}
 	}
+	if qmaxSegments <= 0 {
+		qmaxSegments = defaultBOLAQmaxSegments
+	}
 	return &bolaFiniteABR{
 		sizeProvider: estimator,
-		qmaxSegments: 3,
+		// qmaxSegments is the finite-buffer BOLA Qmax, expressed in segments.
+		qmaxSegments: qmaxSegments,
 		gamma:        1.0,
 		wFOV:         1.0,
 		wNonFOV:      0.2,

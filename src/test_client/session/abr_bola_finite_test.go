@@ -79,6 +79,34 @@ func TestBolaNoFOVDefaultsToLow(t *testing.T) {
 	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
 }
 
+func TestBolaQmaxChangesQualityDecision(t *testing.T) {
+	ctx := SegmentContext{
+		SegmentID:       10,
+		FirstSegment:    1,
+		LastSegment:     120,
+		SegmentDuration: time.Second,
+		TimeBudget:      20 * time.Second,
+		AvgThroughput:   80 * 1024 * 1024,
+		BufferLevel:     3 * time.Second,
+		FOVTiles:        []int{1, 2},
+		AllTiles:        []int{1, 2},
+	}
+
+	qmax3 := newBolaFiniteABRWithEstimatorAndQmax(fakeSizeProvider{size: 100}, 3)
+	qmax5 := newBolaFiniteABRWithEstimatorAndQmax(fakeSizeProvider{size: 100}, 5)
+
+	require.Equal(t, "A_all_low", qmax3.SelectConfig(ctx).ID)
+	require.Equal(t, "C_fov_high", qmax5.SelectConfig(ctx).ID)
+}
+
+func TestBolaInvalidQmaxFallsBackToDefault(t *testing.T) {
+	abr := newBolaFiniteABRWithEstimatorAndQmax(fakeSizeProvider{size: 100}, 0)
+	bola, ok := abr.(*bolaFiniteABR)
+
+	require.True(t, ok)
+	require.Equal(t, defaultBOLAQmaxSegments, bola.qmaxSegments)
+}
+
 // TestBolaWithVariableTileMassesTable cobre cenários “dataset-like”: tiles com
 // massas distintas (como após variantes de bitrate no disco), buffer e
 // orçamento variando. Rápido (sem rede) e estável para CI.

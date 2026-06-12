@@ -18,7 +18,7 @@
 #   - abr_extremes_delivered_counts.png
 #
 # Usage:
-#   ./run_bola_vs_legacy_extremes.sh [--reuse] <IP>
+#   ./run_bola_vs_legacy_extremes.sh [--reuse] [--bola-qmax N] <IP>
 #
 # --reuse   Skip first build/upload and reuse remote binary (--no-build in all runs).
 #
@@ -27,14 +27,16 @@ set -euo pipefail
 
 PROGRAM_NAME=$0
 show_usage() {
-    echo "Usage: $PROGRAM_NAME [--reuse] <IP>"
+    echo "Usage: $PROGRAM_NAME [--reuse] [--bola-qmax N] <IP>"
 }
 
 REUSE_REMOTE=0
+BOLA_QMAX_SEGMENTS="${BOLA_QMAX_SEGMENTS:-5}"
 IP=
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
     --reuse) REUSE_REMOTE=1 ; shift ;;
+    --bola-qmax) BOLA_QMAX_SEGMENTS="$2" ; shift 2 ;;
     -*) show_usage ; exit 1 ;;
     *) IP="$1" ; shift ;;
     esac
@@ -91,11 +93,12 @@ client_bw_mbps=$CBW
 loss_pct=$LOSS
 parallelism=$PAR
 fov_mode=normal
+BOLA_QMAX_SEGMENTS=$BOLA_QMAX_SEGMENTS
 EOF
 
         PARAMS=(-o "$log_dir" --"$SCHEDULER" --abr "$ABR" --sbw "$SERVER_BW" --cbw "$CBW" \
             --loss "$LOSS" -p "$PAR" --delay "$DELAY" --load "$BG" \
-            --baselatency "$BASELAT" --fov normal)
+            --baselatency "$BASELAT" --fov normal --bola-qmax "$BOLA_QMAX_SEGMENTS")
         printf "%s\n" "${PARAMS[*]}" > "$log_dir/parameters"
 
         echo "[INFO] condition=$CID abr=$ABR cbw=$CBW loss=$LOSS delay=$DELAY bg=$BG"

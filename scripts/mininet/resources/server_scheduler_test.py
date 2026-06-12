@@ -20,6 +20,7 @@ LOAD = float(os.environ['LOAD'])
 BASE_LATENCY = int(os.environ['BASE_LATENCY'])
 FOV_TRACE_PATH = os.environ.get('FOV_TRACE_PATH', '')
 BOLA_DEBUG_PATH = os.environ.get('BOLA_DEBUG_PATH', '')
+BOLA_QMAX_SEGMENTS = os.environ.get('BOLA_QMAX_SEGMENTS', '')
 
 print('SERVER_MODE=', SERVER_MODE)
 print('ABR_MODE=', ABR_MODE)
@@ -32,6 +33,7 @@ print('LOAD=', LOAD)
 print('BASE_LATENCY=', BASE_LATENCY)
 print('FOV_TRACE_PATH=', FOV_TRACE_PATH)
 print('BOLA_DEBUG_PATH=', BOLA_DEBUG_PATH)
+print('BOLA_QMAX_SEGMENTS=', BOLA_QMAX_SEGMENTS)
 
 def safe_print(msg: str):
     try:
@@ -128,6 +130,8 @@ class Test():
             client_env['FOV_TRACE_PATH'] = FOV_TRACE_PATH
         if BOLA_DEBUG_PATH:
             client_env['BOLA_DEBUG_PATH'] = BOLA_DEBUG_PATH
+        if BOLA_QMAX_SEGMENTS:
+            client_env['BOLA_QMAX_SEGMENTS'] = BOLA_QMAX_SEGMENTS
         self.processes[self.client] = self.client.popen(
             [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM),
              str(BASE_LATENCY)],

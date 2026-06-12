@@ -34,6 +34,7 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		ClientQUICUplinkLossRatePath: envCfg.ClientQUICUplinkLossRatePath,
 		ABRMode:                      envCfg.ABRMode,
 		BOLADebugPath:                envCfg.BOLADebugPath,
+		BOLAQmaxSegments:             envCfg.BOLAQmaxSegments,
 	}
 
 	opts := session.Options{

@@ -46,6 +46,7 @@ type Environment struct {
 	ClientQUICUplinkLossRatePath string
 	ABRMode                      string
 	BOLADebugPath                string
+	BOLAQmaxSegments             int
 }
 
 type TestSession struct {

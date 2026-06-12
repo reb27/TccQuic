@@ -12,6 +12,7 @@ const (
 	defaultFOVTraceFPS            = 30
 	defaultSegmentDurationSeconds = 1
 	defaultABRMode                = "bola"
+	defaultBOLAQmaxSegments       = 5
 )
 
 type EnvironmentConfig struct {
@@ -26,6 +27,7 @@ type EnvironmentConfig struct {
 	ClientQUICUplinkLossRatePath string
 	ABRMode                      string
 	BOLADebugPath                string
+	BOLAQmaxSegments             int
 }
 
 func ResolveEnvironmentConfig() EnvironmentConfig {
@@ -35,6 +37,10 @@ func ResolveEnvironmentConfig() EnvironmentConfig {
 		FOVTraceFPS:   getEnvInt("FOV_TRACE_FPS", defaultFOVTraceFPS),
 		ABRMode:       getEnvOrDefault("ABR_MODE", defaultABRMode),
 		BOLADebugPath: os.Getenv("BOLA_DEBUG_PATH"),
+		BOLAQmaxSegments: getEnvInt(
+			"BOLA_QMAX_SEGMENTS",
+			defaultBOLAQmaxSegments,
+		),
 	}
 
 	pid := os.Getpid()

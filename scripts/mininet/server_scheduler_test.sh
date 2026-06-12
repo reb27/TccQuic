@@ -8,6 +8,7 @@ showUsage() {
     echo "OPTIONS:"
     echo "--fifo, --sp, --wfq  Select server mode (default: fifo)"
     echo "--abr MODE              Select client ABR mode (bola|legacy)"
+    echo "--bola-qmax N           Select BOLA Qmax in segments"
     echo "--sbw N                 Select server bandwidth in Mbps"
     echo "--cbw N                 Select client bandwidth in Mbps"
     echo "--baselatency N         Select client base latency"
@@ -34,6 +35,7 @@ NO_BUILD=0
 IP=
 LOG_DIR=
 BOLA_DEBUG_PATH="${BOLA_DEBUG_PATH:-}"
+BOLA_QMAX_SEGMENTS="${BOLA_QMAX_SEGMENTS:-5}"
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
@@ -41,6 +43,7 @@ while [[ "$#" > 0 ]]; do
     --sp)     SERVER_MODE="sp"              ; shift   ;;
     --wfq)    SERVER_MODE="wfq"             ; shift   ;;
     --abr)  ABR_MODE="$2"                   ; shift 2 ;;
+    --bola-qmax) BOLA_QMAX_SEGMENTS="$2"    ; shift 2 ;;
     --sbw)  SERVER_BW="$2"                  ; shift 2 ;;
     --cbw)  CLIENT_BW="$2"                  ; shift 2 ;;
     --baselatency)  BASE_LATENCY="$2"       ; shift 2 ;;
@@ -192,6 +195,7 @@ background_load_pct=$LOAD
 base_latency_ms=$BASE_LATENCY
 fov_mode=$FOV_MODE
 BOLA_DEBUG_PATH=$BOLA_DEBUG_PATH
+BOLA_QMAX_SEGMENTS=$BOLA_QMAX_SEGMENTS
 EOF
 fi
 
@@ -200,6 +204,7 @@ withSSH "cd $REMOTE_DIR && \
             CLIENT_BW='$CLIENT_BW' LOSS='$LOSS' PARALELLISM='$PARALELLISM' \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             FOV_TRACE_PATH='$FOV_TRACE_PATH' BOLA_DEBUG_PATH='$BOLA_DEBUG_PATH' \
+            BOLA_QMAX_SEGMENTS='$BOLA_QMAX_SEGMENTS' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 PIPE_RC=( "${PIPESTATUS[@]}" )
 PY_RC=${PIPE_RC[0]:-1}
