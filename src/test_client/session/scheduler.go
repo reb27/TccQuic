@@ -76,6 +76,8 @@ func BuildTileRequestPlan(segmentID int, cfg SegmentConfig, tiles []int, fovTrac
 		requestBitrate := cfg.NonFOVBitrate
 		if inFOV {
 			requestBitrate = cfg.FOVBitrate
+		} else if nearFOV {
+			requestBitrate = cfg.NearFOVBitrate
 		}
 
 		plan = append(plan, TileRequestPlanItem{

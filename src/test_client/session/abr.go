@@ -25,9 +25,10 @@ type SegmentContext struct {
 }
 
 type SegmentConfig struct {
-	ID            string
-	FOVBitrate    model.Bitrate
-	NonFOVBitrate model.Bitrate
+	ID             string
+	FOVBitrate     model.Bitrate
+	NearFOVBitrate model.Bitrate
+	NonFOVBitrate  model.Bitrate
 }
 
 type BitrateInfo struct {
@@ -70,9 +71,10 @@ func SelectABRController(env Environment) ABRController {
 func (c *bufferAwareABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	fovBitrate := c.selectBitrate(ctx.AvgThroughput, ctx.BufferLevel, true)
 	return SegmentConfig{
-		ID:            "default",
-		FOVBitrate:    fovBitrate,
-		NonFOVBitrate: model.LOW_BITRATE,
+		ID:             "default",
+		FOVBitrate:     fovBitrate,
+		NearFOVBitrate: model.LOW_BITRATE,
+		NonFOVBitrate:  model.LOW_BITRATE,
 	}
 }
 

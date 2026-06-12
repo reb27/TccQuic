@@ -67,9 +67,9 @@ func newBolaFiniteABRWithEstimatorAndQmax(estimator TileSizeProvider, qmaxSegmen
 		wFOV:         1.0,
 		wNonFOV:      0.2,
 		configs: []SegmentConfig{
-			{ID: "A_all_low", FOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
-			{ID: "B_fov_med", FOVBitrate: model.MEDIUM_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
-			{ID: "C_fov_high", FOVBitrate: model.HIGH_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
+			{ID: "A_all_low", FOVBitrate: model.LOW_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
+			{ID: "B_fov_med", FOVBitrate: model.MEDIUM_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
+			{ID: "C_fov_high", FOVBitrate: model.HIGH_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
 		},
 		debug: logger,
 	}
@@ -77,7 +77,7 @@ func newBolaFiniteABRWithEstimatorAndQmax(estimator TileSizeProvider, qmaxSegmen
 
 func (b *bolaFiniteABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	if len(b.configs) == 0 {
-		return SegmentConfig{ID: "A_all_low", FOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE}
+		return SegmentConfig{ID: "A_all_low", FOVBitrate: model.LOW_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE}
 	}
 	p := ctx.SegmentDuration.Seconds()
 	if p <= 0 {

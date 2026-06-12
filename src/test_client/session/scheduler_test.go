@@ -13,9 +13,10 @@ import (
 func TestBuildTileRequestPlanPrioritizesFOV(t *testing.T) {
 	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
 	cfg := SegmentConfig{
-		ID:            "test",
-		FOVBitrate:    model.HIGH_BITRATE,
-		NonFOVBitrate: model.LOW_BITRATE,
+		ID:             "test",
+		FOVBitrate:     model.HIGH_BITRATE,
+		NearFOVBitrate: model.MEDIUM_BITRATE,
+		NonFOVBitrate:  model.LOW_BITRATE,
 	}
 
 	plan := BuildTileRequestPlan(1, cfg, []int{8, 5, 3}, trace)
@@ -24,11 +25,11 @@ func TestBuildTileRequestPlanPrioritizesFOV(t *testing.T) {
 	if !plan[0].InFOV || plan[0].Bitrate != model.HIGH_BITRATE || plan[0].Priority != model.HIGH_PRIORITY {
 		t.Fatalf("expected first request to be HIGH/FOV, got %+v", plan[0])
 	}
-	if plan[1].Priority != model.MEDIUM_PRIORITY || plan[1].SemanticPriority != float32(model.SemanticPiNearFoV) {
-		t.Fatalf("expected near-FOV semantic priority on tile 3, got %+v", plan[1])
+	if plan[1].Bitrate != model.MEDIUM_BITRATE || plan[1].Priority != model.MEDIUM_PRIORITY || plan[1].SemanticPriority != float32(model.SemanticPiNearFoV) {
+		t.Fatalf("expected near-FOV request to use MEDIUM bitrate and semantic priority on tile 3, got %+v", plan[1])
 	}
-	if plan[2].Priority != model.LOW_PRIORITY || plan[2].SemanticPriority != float32(model.SemanticPiBackground) {
-		t.Fatalf("expected background semantic priority on tile 8, got %+v", plan[2])
+	if plan[2].Bitrate != model.LOW_BITRATE || plan[2].Priority != model.LOW_PRIORITY || plan[2].SemanticPriority != float32(model.SemanticPiBackground) {
+		t.Fatalf("expected background request to use LOW bitrate and semantic priority on tile 8, got %+v", plan[2])
 	}
 	for i, item := range plan {
 		if item.RequestOrder != i+1 {
@@ -39,9 +40,10 @@ func TestBuildTileRequestPlanPrioritizesFOV(t *testing.T) {
 
 func TestBuildTileRequestPlanDeterministicWithoutFOVTrace(t *testing.T) {
 	cfg := SegmentConfig{
-		ID:            "test",
-		FOVBitrate:    model.HIGH_BITRATE,
-		NonFOVBitrate: model.LOW_BITRATE,
+		ID:             "test",
+		FOVBitrate:     model.HIGH_BITRATE,
+		NearFOVBitrate: model.MEDIUM_BITRATE,
+		NonFOVBitrate:  model.LOW_BITRATE,
 	}
 
 	plan := BuildTileRequestPlan(1, cfg, []int{9, 2, 5}, nil)
