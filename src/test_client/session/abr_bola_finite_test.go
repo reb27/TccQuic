@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,7 @@ func TestBolaGuardrailFallsBack(t *testing.T) {
 	cfg := abr.SelectConfig(ctx)
 	require.Equal(t, "A_all_low", cfg.ID)
 	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NearFOVBitrate)
 	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
 }
 
@@ -76,6 +78,7 @@ func TestBolaNoFOVDefaultsToLow(t *testing.T) {
 	cfg := abr.SelectConfig(ctx)
 	require.Equal(t, "A_all_low", cfg.ID)
 	require.Equal(t, model.LOW_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NearFOVBitrate)
 	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
 }
 
@@ -96,7 +99,9 @@ func TestBolaQmaxChangesQualityDecision(t *testing.T) {
 	qmax5 := newBolaFiniteABRWithEstimatorAndQmax(fakeSizeProvider{size: 100}, 5)
 
 	require.Equal(t, "A_all_low", qmax3.SelectConfig(ctx).ID)
-	require.Equal(t, "C_fov_high", qmax5.SelectConfig(ctx).ID)
+	cfg := qmax5.SelectConfig(ctx)
+	require.Equal(t, "C_fov_high", cfg.ID)
+	require.Equal(t, model.LOW_BITRATE, cfg.NearFOVBitrate)
 }
 
 func TestBolaInvalidQmaxFallsBackToDefault(t *testing.T) {
@@ -105,6 +110,113 @@ func TestBolaInvalidQmaxFallsBackToDefault(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, defaultBOLAQmaxSegments, bola.qmaxSegments)
+}
+
+func TestBolaChoosesHighNearMedWhenNearFOVPresent(t *testing.T) {
+	ctx := SegmentContext{
+		SegmentID:       10,
+		FirstSegment:    1,
+		LastSegment:     120,
+		SegmentDuration: time.Second,
+		TimeBudget:      20 * time.Second,
+		AvgThroughput:   80 * 1024 * 1024,
+		BufferLevel:     3 * time.Second,
+		FOVTiles:        []int{1, 2},
+		NearFOVTiles:    []int{3, 4},
+		AllTiles:        []int{1, 2, 3, 4},
+	}
+
+	abr := newBolaFiniteABRWithEstimatorAndQmax(fakeSizeProvider{size: 100}, 5)
+	cfg := abr.SelectConfig(ctx)
+
+	require.Equal(t, "D_fov_high_near_med", cfg.ID)
+	require.Equal(t, model.HIGH_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.MEDIUM_BITRATE, cfg.NearFOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
+}
+
+func TestBolaGuardrailCanDowngradeHighNearMed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bola-debug.csv")
+	ctx := SegmentContext{
+		SegmentID:       10,
+		FirstSegment:    1,
+		LastSegment:     120,
+		SegmentDuration: time.Second,
+		TimeBudget:      time.Second,
+		AvgThroughput:   1_100,
+		BufferLevel:     3 * time.Second,
+		FOVTiles:        []int{1, 2},
+		NearFOVTiles:    []int{3, 4},
+		AllTiles:        []int{1, 2, 3, 4},
+	}
+	abr := newBolaFiniteABRWithEstimatorAndQmax(mapTileSizeProvider{
+		byTile: map[int]map[model.Bitrate]int64{
+			1: {
+				model.LOW_BITRATE:    250,
+				model.MEDIUM_BITRATE: 250,
+				model.HIGH_BITRATE:   450,
+			},
+			2: {
+				model.LOW_BITRATE:    250,
+				model.MEDIUM_BITRATE: 250,
+				model.HIGH_BITRATE:   450,
+			},
+			3: {
+				model.LOW_BITRATE:    50,
+				model.MEDIUM_BITRATE: 150,
+			},
+			4: {
+				model.LOW_BITRATE:    50,
+				model.MEDIUM_BITRATE: 150,
+			},
+		},
+		fallback: 100,
+	}, 5, path)
+
+	cfg := abr.SelectConfig(ctx)
+	row := readBolaDebugRow(t, path)
+
+	require.Equal(t, "C_fov_high", cfg.ID)
+	require.Equal(t, model.HIGH_BITRATE, cfg.FOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NearFOVBitrate)
+	require.Equal(t, model.LOW_BITRATE, cfg.NonFOVBitrate)
+	require.Equal(t, "D_fov_high_near_med", row["cfg_before_guardrail"])
+	require.Equal(t, "C_fov_high", row["cfg_after_guardrail"])
+	require.Equal(t, "true", row["guardrail"])
+	require.Equal(t, 1_100.0, parseDebugFloat(t, row["budget_bytes"]))
+	require.Equal(t, 1_000.0, parseDebugFloat(t, row["size_high_bytes"]))
+	require.Equal(t, 1_200.0, parseDebugFloat(t, row["size_fov_high_near_med_bytes"]))
+	require.Greater(t,
+		parseDebugFloat(t, row["score_fov_high_near_med"]),
+		parseDebugFloat(t, row["score_high"]),
+	)
+}
+
+func TestBolaConfigSizeUsesNearFOVBitrate(t *testing.T) {
+	abr := newBolaFiniteABRWithEstimatorAndQmax(mapTileSizeProvider{
+		byTile: map[int]map[model.Bitrate]int64{
+			1: {model.HIGH_BITRATE: 1000},
+			2: {model.MEDIUM_BITRATE: 500},
+			3: {model.LOW_BITRATE: 100},
+		},
+		fallback: 1,
+	}, 5)
+	bola, ok := abr.(*bolaFiniteABR)
+	require.True(t, ok)
+
+	size := bola.configSize(
+		[]int{1, 2, 3},
+		map[int]struct{}{1: {}},
+		map[int]struct{}{2: {}},
+		SegmentConfig{
+			ID:             "test",
+			FOVBitrate:     model.HIGH_BITRATE,
+			NearFOVBitrate: model.MEDIUM_BITRATE,
+			NonFOVBitrate:  model.LOW_BITRATE,
+		},
+	)
+
+	require.EqualValues(t, 1600, size)
 }
 
 // TestBolaWithVariableTileMassesTable cobre cenários “dataset-like”: tiles com
@@ -250,13 +362,37 @@ func TestBolaDebugCSVWritesHeaderAndRow(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	require.Len(t, lines, 2)
-	require.Equal(t, "segment,cfg_before_guardrail,cfg_after_guardrail,avg_tp_bps,avg_tp_kib_s,time_budget_s,budget_bytes,size_low_bytes,size_med_bytes,size_high_bytes,guardrail,buffer_s,score_low,score_med,score_high", lines[0])
+	require.Equal(t, "segment,cfg_before_guardrail,cfg_after_guardrail,avg_tp_bps,avg_tp_kib_s,time_budget_s,budget_bytes,size_low_bytes,size_med_bytes,size_high_bytes,size_fov_high_near_med_bytes,guardrail,buffer_s,score_low,score_med,score_high,score_fov_high_near_med", lines[0])
 
 	fields := strings.Split(lines[1], ",")
-	require.Len(t, fields, 15)
+	require.Len(t, fields, 17)
 	require.Equal(t, "7", fields[0])
 	require.Equal(t, "1024.000000", fields[3])
 	require.Equal(t, "1.000000", fields[4])
 	require.Equal(t, "2.000000", fields[5])
 	require.Equal(t, "2048.000000", fields[6])
+}
+
+func readBolaDebugRow(t *testing.T, path string) map[string]string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	require.Len(t, lines, 2)
+	header := strings.Split(lines[0], ",")
+	values := strings.Split(lines[1], ",")
+	require.Len(t, values, len(header))
+
+	row := make(map[string]string, len(header))
+	for i, key := range header {
+		row[key] = values[i]
+	}
+	return row
+}
+
+func parseDebugFloat(t *testing.T, value string) float64 {
+	t.Helper()
+	parsed, err := strconv.ParseFloat(value, 64)
+	require.NoError(t, err)
+	return parsed
 }

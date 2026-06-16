@@ -59,6 +59,14 @@ func TestBuildTileRequestPlanDeterministicWithoutFOVTrace(t *testing.T) {
 	}
 }
 
+func TestNearFOVTilesForSegmentExcludesFOVAndBackground(t *testing.T) {
+	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
+
+	tiles := nearFOVTilesForSegment(trace, 1, []int{3, 5, 8})
+
+	assertTiles(t, tiles, []int{3})
+}
+
 func loadTestFOVTrace(t *testing.T, content string) *fov.FOVTrace {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fov.csv")
@@ -80,6 +88,18 @@ func assertPlanTiles(t *testing.T, plan []TileRequestPlanItem, want []int) {
 	for i, tileID := range want {
 		if plan[i].TileID != tileID {
 			t.Fatalf("expected tile order %v, got %+v", want, plan)
+		}
+	}
+}
+
+func assertTiles(t *testing.T, got []int, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("expected tiles %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected tiles %v, got %v", want, got)
 		}
 	}
 }

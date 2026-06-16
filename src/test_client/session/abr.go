@@ -21,6 +21,7 @@ type SegmentContext struct {
 	AvgThroughput   float64
 	BufferLevel     time.Duration
 	FOVTiles        []int
+	NearFOVTiles    []int
 	AllTiles        []int
 }
 
@@ -70,10 +71,14 @@ func SelectABRController(env Environment) ABRController {
 
 func (c *bufferAwareABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	fovBitrate := c.selectBitrate(ctx.AvgThroughput, ctx.BufferLevel, true)
+	nearFOVBitrate := model.LOW_BITRATE
+	if fovBitrate == model.HIGH_BITRATE {
+		nearFOVBitrate = model.MEDIUM_BITRATE
+	}
 	return SegmentConfig{
 		ID:             "default",
 		FOVBitrate:     fovBitrate,
-		NearFOVBitrate: model.LOW_BITRATE,
+		NearFOVBitrate: nearFOVBitrate,
 		NonFOVBitrate:  model.LOW_BITRATE,
 	}
 }

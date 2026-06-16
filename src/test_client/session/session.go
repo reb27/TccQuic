@@ -161,8 +161,10 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 	s.metrics.DeadlineLateness.SetRequired(segmentID, segmentTiles)
 
 	var fovTiles []int
+	var nearFOVTiles []int
 	if s.fovTrace != nil {
 		fovTiles = filterTilesAvailable(s.fovTrace.TilesForSegment(segmentID), segmentTiles)
+		nearFOVTiles = nearFOVTilesForSegment(s.fovTrace, segmentID, segmentTiles)
 	}
 	s.metrics.FOVTiles.SetRequired(segmentID, fovTiles)
 
@@ -175,10 +177,11 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 		AvgThroughput:   avgThroughput,
 		BufferLevel:     bufferLevel,
 		FOVTiles:        fovTiles,
+		NearFOVTiles:    nearFOVTiles,
 		AllTiles:        segmentTiles,
 	}
 	cfg := s.abr.SelectConfig(ctx)
-	log.Printf("ABR: cfg=%s fov_bitrate=%d nonfov_bitrate=%d avg_tp=%.2f buffer=%.2f s", cfg.ID, cfg.FOVBitrate, cfg.NonFOVBitrate, avgThroughput, bufferLevel.Seconds())
+	log.Printf("ABR: cfg=%s fov_bitrate=%d near_fov_bitrate=%d nonfov_bitrate=%d avg_tp=%.2f buffer=%.2f s", cfg.ID, cfg.FOVBitrate, cfg.NearFOVBitrate, cfg.NonFOVBitrate, avgThroughput, bufferLevel.Seconds())
 	scheduler.ScheduleSegment(segmentID, segmentDeadline, cfg, segmentTiles, s.fovTrace)
 }
 
@@ -288,4 +291,20 @@ func filterTilesAvailable(tiles []int, available []int) []int {
 		return nil
 	}
 	return filtered
+}
+
+func nearFOVTilesForSegment(trace *fov.FOVTrace, segmentID int, segmentTiles []int) []int {
+	if trace == nil || len(segmentTiles) == 0 {
+		return nil
+	}
+	tiles := make([]int, 0)
+	for _, tileID := range segmentTiles {
+		if trace.NearFoV(segmentID, tileID, nearFoVMargin) {
+			tiles = append(tiles, tileID)
+		}
+	}
+	if len(tiles) == 0 {
+		return nil
+	}
+	return tiles
 }

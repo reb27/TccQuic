@@ -18,6 +18,7 @@ type bolaFiniteABR struct {
 	qmaxSegments float64
 	gamma        float64
 	wFOV         float64
+	wNearFOV     float64
 	wNonFOV      float64
 	configs      []SegmentConfig
 	debug        *bolaDebugLogger
@@ -65,11 +66,13 @@ func newBolaFiniteABRWithEstimatorAndQmax(estimator TileSizeProvider, qmaxSegmen
 		qmaxSegments: qmaxSegments,
 		gamma:        1.0,
 		wFOV:         1.0,
+		wNearFOV:     0.5,
 		wNonFOV:      0.2,
 		configs: []SegmentConfig{
 			{ID: "A_all_low", FOVBitrate: model.LOW_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
 			{ID: "B_fov_med", FOVBitrate: model.MEDIUM_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
 			{ID: "C_fov_high", FOVBitrate: model.HIGH_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
+			{ID: "D_fov_high_near_med", FOVBitrate: model.HIGH_BITRATE, NearFOVBitrate: model.MEDIUM_BITRATE, NonFOVBitrate: model.LOW_BITRATE},
 		},
 		debug: logger,
 	}
@@ -88,23 +91,34 @@ func (b *bolaFiniteABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	for _, t := range ctx.FOVTiles {
 		fovSet[t] = struct{}{}
 	}
+	nearFOVSet := make(map[int]struct{}, len(ctx.NearFOVTiles))
+	for _, t := range ctx.NearFOVTiles {
+		if _, inFOV := fovSet[t]; !inFOV {
+			nearFOVSet[t] = struct{}{}
+		}
+	}
 	fovCount := 0
-	nonFOVCount := 0
+	nearFOVCount := 0
+	backgroundCount := 0
 	for _, tileID := range ctx.AllTiles {
 		if _, ok := fovSet[tileID]; ok {
 			fovCount++
+		} else if _, ok := nearFOVSet[tileID]; ok {
+			nearFOVCount++
 		} else {
-			nonFOVCount++
+			backgroundCount++
 		}
 	}
-	if fovCount+nonFOVCount == 0 {
+	if fovCount+nearFOVCount+backgroundCount == 0 {
 		return b.configs[0]
 	}
 
 	options := make([]bolaConfigOption, 0, len(b.configs))
 	for _, cfg := range b.configs {
-		size := b.configSize(ctx.AllTiles, fovSet, cfg)
-		utility := b.wFOV*float64(fovCount)*utilityFor(cfg.FOVBitrate) + b.wNonFOV*float64(nonFOVCount)*utilityFor(cfg.NonFOVBitrate)
+		size := b.configSize(ctx.AllTiles, fovSet, nearFOVSet, cfg)
+		utility := b.wFOV*float64(fovCount)*utilityFor(cfg.FOVBitrate) +
+			b.wNearFOV*float64(nearFOVCount)*utilityFor(cfg.NearFOVBitrate) +
+			b.wNonFOV*float64(backgroundCount)*utilityFor(cfg.NonFOVBitrate)
 		options = append(options, bolaConfigOption{cfg: cfg, size: size, utility: utility})
 	}
 
@@ -179,8 +193,8 @@ func (b *bolaFiniteABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	throughputKiBps := ctx.AvgThroughput / 1024.0
 	budgetKB := budgetBytes / 1024.0
 	chosenKB := float64(chosen.size) / 1024.0
-	log.Printf("ABR (BOLA): seg=%d cfg=%s fov=%d nonfov=%d buf=%.2fs thr=%.1f KiB/s budget=%.1f KiB size=%.1f KiB score=%.4f guardrail=%t uMax=%.2f V=%.4f Q=%.2f",
-		ctx.SegmentID, chosen.cfg.ID, chosen.cfg.FOVBitrate, chosen.cfg.NonFOVBitrate, Q*p, throughputKiBps, budgetKB, chosenKB, chosenScore, guardrail, uMax, V, Q)
+	log.Printf("ABR (BOLA): seg=%d cfg=%s fov=%d near=%d nonfov=%d buf=%.2fs thr=%.1f KiB/s budget=%.1f KiB size=%.1f KiB score=%.4f guardrail=%t uMax=%.2f V=%.4f Q=%.2f",
+		ctx.SegmentID, chosen.cfg.ID, chosen.cfg.FOVBitrate, chosen.cfg.NearFOVBitrate, chosen.cfg.NonFOVBitrate, Q*p, throughputKiBps, budgetKB, chosenKB, chosenScore, guardrail, uMax, V, Q)
 	b.writeDebug(ctx, options, chosenBeforeGuardrail, chosen, budgetBytes, guardrail)
 
 	return chosen.cfg
@@ -190,12 +204,14 @@ func utilityFor(bitrate model.Bitrate) float64 {
 	return math.Log(float64(bitrate))
 }
 
-func (b *bolaFiniteABR) configSize(allTiles []int, fovSet map[int]struct{}, cfg SegmentConfig) int64 {
+func (b *bolaFiniteABR) configSize(allTiles []int, fovSet map[int]struct{}, nearFOVSet map[int]struct{}, cfg SegmentConfig) int64 {
 	var total int64
 	for _, tileID := range allTiles {
 		bitrate := cfg.NonFOVBitrate
 		if _, ok := fovSet[tileID]; ok {
 			bitrate = cfg.FOVBitrate
+		} else if _, ok := nearFOVSet[tileID]; ok {
+			bitrate = cfg.NearFOVBitrate
 		}
 		size := b.sizeProvider.AvgSize(tileID, bitrate)
 		if size <= 0 {
@@ -221,11 +237,13 @@ func (b *bolaFiniteABR) writeDebug(ctx SegmentContext, options []bolaConfigOptio
 		sizeLowBytes:       sizeByConfigID(options, "A_all_low"),
 		sizeMedBytes:       sizeByConfigID(options, "B_fov_med"),
 		sizeHighBytes:      sizeByConfigID(options, "C_fov_high"),
+		sizeHighNearMed:    sizeByConfigID(options, "D_fov_high_near_med"),
 		guardrail:          guardrail,
 		bufferS:            ctx.BufferLevel.Seconds(),
 		scoreLow:           scoreByConfigID(options, "A_all_low"),
 		scoreMed:           scoreByConfigID(options, "B_fov_med"),
 		scoreHigh:          scoreByConfigID(options, "C_fov_high"),
+		scoreHighNearMed:   scoreByConfigID(options, "D_fov_high_near_med"),
 	})
 }
 
@@ -258,11 +276,13 @@ type bolaDebugRow struct {
 	sizeLowBytes       int64
 	sizeMedBytes       int64
 	sizeHighBytes      int64
+	sizeHighNearMed    int64
 	guardrail          bool
 	bufferS            float64
 	scoreLow           float64
 	scoreMed           float64
 	scoreHigh          float64
+	scoreHighNearMed   float64
 }
 
 type bolaDebugLogger struct {
@@ -278,7 +298,7 @@ func newBolaDebugLogger(path string) (*bolaDebugLogger, error) {
 	}
 	writer := bufio.NewWriter(file)
 	logger := &bolaDebugLogger{file: file, writer: writer}
-	if _, err := writer.WriteString("segment,cfg_before_guardrail,cfg_after_guardrail,avg_tp_bps,avg_tp_kib_s,time_budget_s,budget_bytes,size_low_bytes,size_med_bytes,size_high_bytes,guardrail,buffer_s,score_low,score_med,score_high\n"); err != nil {
+	if _, err := writer.WriteString("segment,cfg_before_guardrail,cfg_after_guardrail,avg_tp_bps,avg_tp_kib_s,time_budget_s,budget_bytes,size_low_bytes,size_med_bytes,size_high_bytes,size_fov_high_near_med_bytes,guardrail,buffer_s,score_low,score_med,score_high,score_fov_high_near_med\n"); err != nil {
 		file.Close()
 		return nil, err
 	}
@@ -293,7 +313,7 @@ func (l *bolaDebugLogger) Log(row bolaDebugRow) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if _, err := fmt.Fprintf(l.writer, "%d,%s,%s,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%t,%.6f,%.12f,%.12f,%.12f\n",
+	if _, err := fmt.Fprintf(l.writer, "%d,%s,%s,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%t,%.6f,%.12f,%.12f,%.12f,%.12f\n",
 		row.segment,
 		row.cfgBeforeGuardrail,
 		row.cfgAfterGuardrail,
@@ -304,11 +324,13 @@ func (l *bolaDebugLogger) Log(row bolaDebugRow) {
 		row.sizeLowBytes,
 		row.sizeMedBytes,
 		row.sizeHighBytes,
+		row.sizeHighNearMed,
 		row.guardrail,
 		row.bufferS,
 		row.scoreLow,
 		row.scoreMed,
 		row.scoreHigh,
+		row.scoreHighNearMed,
 	); err != nil {
 		log.Printf("BOLA ABR: failed to write debug CSV row: %v", err)
 		return
