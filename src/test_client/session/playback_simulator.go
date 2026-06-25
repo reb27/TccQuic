@@ -104,6 +104,12 @@ func (p *PlaybackSimulator) GetBufferLevel(lastDownloadedSegment int) time.Durat
 	return bufferLevel
 }
 
+func (p *PlaybackSimulator) CurrentPlaybackSegment() int {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	return p.currentPlaybackSegment
+}
+
 func (p *PlaybackSimulator) GetPlaybackStartTime() time.Time {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()

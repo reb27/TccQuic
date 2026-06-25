@@ -28,15 +28,17 @@ type EnvironmentConfig struct {
 	ABRMode                      string
 	BOLADebugPath                string
 	BOLAQmaxSegments             int
+	LegacyDebugPath              string
 }
 
 func ResolveEnvironmentConfig() EnvironmentConfig {
 	cfg := EnvironmentConfig{
-		Pipeline:      defaultPipeline,
-		FOVTracePath:  getEnvOrDefault("FOV_TRACE_PATH", defaultFOVTracePath),
-		FOVTraceFPS:   getEnvInt("FOV_TRACE_FPS", defaultFOVTraceFPS),
-		ABRMode:       getEnvOrDefault("ABR_MODE", defaultABRMode),
-		BOLADebugPath: os.Getenv("BOLA_DEBUG_PATH"),
+		Pipeline:        defaultPipeline,
+		FOVTracePath:    getEnvOrDefault("FOV_TRACE_PATH", defaultFOVTracePath),
+		FOVTraceFPS:     getEnvInt("FOV_TRACE_FPS", defaultFOVTraceFPS),
+		ABRMode:         getEnvOrDefault("ABR_MODE", defaultABRMode),
+		BOLADebugPath:   os.Getenv("BOLA_DEBUG_PATH"),
+		LegacyDebugPath: os.Getenv("LEGACY_DEBUG_PATH"),
 		BOLAQmaxSegments: getEnvInt(
 			"BOLA_QMAX_SEGMENTS",
 			defaultBOLAQmaxSegments,

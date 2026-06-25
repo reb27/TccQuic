@@ -59,6 +59,43 @@ func TestBuildTileRequestPlanDeterministicWithoutFOVTrace(t *testing.T) {
 	}
 }
 
+func TestBuildTileRequestPlanAllLowStillPrioritizesFOVNearAndBackground(t *testing.T) {
+	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
+	cfg := SegmentConfig{
+		ID:             "legacy_low",
+		FOVBitrate:     model.LOW_BITRATE,
+		NearFOVBitrate: model.LOW_BITRATE,
+		NonFOVBitrate:  model.LOW_BITRATE,
+	}
+
+	for _, tiles := range [][]int{{8, 5, 3, 7, 4}, {4, 7, 3, 5, 8}} {
+		plan := BuildTileRequestPlan(1, cfg, tiles, trace)
+		assertPlanTiles(t, plan, []int{5, 3, 4, 7, 8})
+		requireSpatialOrder(t, plan)
+	}
+}
+
+func TestBuildTileRequestPlanScopesNearFOVTieBreakToLegacy(t *testing.T) {
+	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
+	allLow := func(id string) SegmentConfig {
+		return SegmentConfig{ID: id, FOVBitrate: model.LOW_BITRATE, NearFOVBitrate: model.LOW_BITRATE, NonFOVBitrate: model.LOW_BITRATE}
+	}
+
+	bola := BuildTileRequestPlan(1, allLow("A_all_low"), []int{1, 3, 5}, trace)
+	assertPlanTiles(t, bola, []int{5, 1, 3})
+
+	legacy := BuildTileRequestPlan(1, allLow("legacy_low"), []int{1, 3, 5}, trace)
+	assertPlanTiles(t, legacy, []int{5, 3, 1})
+	requireSpatialOrder(t, legacy)
+}
+
+func TestBuildTileRequestPlanPreservesBOLAQualityOrdering(t *testing.T) {
+	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
+	cfg := SegmentConfig{ID: "D_fov_high_near_med", FOVBitrate: model.HIGH_BITRATE, NearFOVBitrate: model.MEDIUM_BITRATE, NonFOVBitrate: model.LOW_BITRATE}
+	plan := BuildTileRequestPlan(1, cfg, []int{1, 3, 5}, trace)
+	assertPlanTiles(t, plan, []int{5, 3, 1})
+}
+
 func TestNearFOVTilesForSegmentExcludesFOVAndBackground(t *testing.T) {
 	trace := loadTestFOVTrace(t, "frames,tile\n1,5\n")
 
@@ -101,5 +138,17 @@ func assertTiles(t *testing.T, got []int, want []int) {
 		if got[i] != want[i] {
 			t.Fatalf("expected tiles %v, got %v", want, got)
 		}
+	}
+}
+
+func requireSpatialOrder(t *testing.T, plan []TileRequestPlanItem) {
+	t.Helper()
+	previous := -1
+	for _, item := range plan {
+		rank := spatialRequestRank(item)
+		if rank < previous {
+			t.Fatalf("spatial priority inversion in plan: %+v", plan)
+		}
+		previous = rank
 	}
 }

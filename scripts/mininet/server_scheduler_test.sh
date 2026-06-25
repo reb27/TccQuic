@@ -36,6 +36,8 @@ IP=
 LOG_DIR=
 BOLA_DEBUG_PATH="${BOLA_DEBUG_PATH:-}"
 BOLA_QMAX_SEGMENTS="${BOLA_QMAX_SEGMENTS:-5}"
+LEGACY_DEBUG_PATH="${LEGACY_DEBUG_PATH:-}"
+TEST_CLIENT_SEGMENT_LIMIT="${TEST_CLIENT_SEGMENT_LIMIT:-0}"
 
 while [[ "$#" > 0 ]]; do
     case "$1" in
@@ -143,6 +145,16 @@ download() {
         echo
         return "$EXIT_CODE"
     fi
+    # The harness terminates the long-lived server after the client exits. If
+    # that prevents the graceful shutdown hook from writing a data row, do not
+    # leave a header-only CSV that could be mistaken for validation evidence.
+    local server_summary="$2/server_summary.csv"
+    if [[ -f "$server_summary" ]] && [[ "$(wc -l < "$server_summary")" -le 1 ]]; then
+        rm -f "$server_summary"
+        printf '%s\n' \
+            'excluded: server process termination produced no summary data row; client tile/segment metrics are the validation evidence' \
+            > "$2/server_summary-excluded.txt"
+    fi
     return 0
 }
 
@@ -170,7 +182,13 @@ if [[ "$NO_BUILD" == 0 ]]; then
     upload "../../main" "$REMOTE_DIR"
     withSSH "chmod +x $REMOTE_DIR/main"
 
-    upload "../../data" "$REMOTE_DIR"
+    # Upload the media as one archive. Sending ~31k small files through one
+    # SCP invocation each makes a reproducible validation unnecessarily slow.
+    DATA_ARCHIVE=$(mktemp /tmp/tccquic-data-XXXXXX.tar.gz)
+    tar -C ../.. -czf "$DATA_ARCHIVE" data
+    upload "$DATA_ARCHIVE" "$REMOTE_DIR/data.tar.gz"
+    withSSH "cd $REMOTE_DIR && tar xzf data.tar.gz && rm data.tar.gz"
+    rm -f "$DATA_ARCHIVE"
 
     upload "resources/server_scheduler_test.py" "$REMOTE_DIR"
     upload "resources/utils.py" "$REMOTE_DIR"
@@ -196,6 +214,8 @@ base_latency_ms=$BASE_LATENCY
 fov_mode=$FOV_MODE
 BOLA_DEBUG_PATH=$BOLA_DEBUG_PATH
 BOLA_QMAX_SEGMENTS=$BOLA_QMAX_SEGMENTS
+LEGACY_DEBUG_PATH=$LEGACY_DEBUG_PATH
+TEST_CLIENT_SEGMENT_LIMIT=$TEST_CLIENT_SEGMENT_LIMIT
 EOF
 fi
 
@@ -205,6 +225,7 @@ withSSH "cd $REMOTE_DIR && \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             FOV_TRACE_PATH='$FOV_TRACE_PATH' BOLA_DEBUG_PATH='$BOLA_DEBUG_PATH' \
             BOLA_QMAX_SEGMENTS='$BOLA_QMAX_SEGMENTS' \
+            LEGACY_DEBUG_PATH='$LEGACY_DEBUG_PATH' TEST_CLIENT_SEGMENT_LIMIT='$TEST_CLIENT_SEGMENT_LIMIT' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 PIPE_RC=( "${PIPESTATUS[@]}" )
 PY_RC=${PIPE_RC[0]:-1}

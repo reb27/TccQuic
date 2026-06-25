@@ -411,8 +411,12 @@ func readFile(req *model.VideoPacketRequest) []byte {
 
 	var firstErr error
 	for _, rep := range representationCandidates(req.Bitrate) {
+		first, second := req.Segment, req.Tile
+		if req.TileFirstLayout {
+			first, second = req.Tile, req.Segment
+		}
 		filePath := fmt.Sprintf("/data/segments/video_tiled_%d_dash_track%d_%d.m4s",
-			rep, req.Segment, req.Tile)
+			rep, first, second)
 		full := basePath + filePath
 		data, readErr := os.ReadFile(full)
 		if readErr == nil {

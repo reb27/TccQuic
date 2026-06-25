@@ -43,7 +43,9 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 		if m == nil {
 			continue
 		}
-		// m[1] = representation, m[2] = segment, m[3] = tile
+		// Dataset layout: track<TILE>_<SEGMENT>. The estimator is consumed only
+		// by Legacy ABR calibration; BOLA does not use this provider.
+		// m[1] = representation, m[2] = tile, m[3] = segment
 		var rep int
 		if _, err := fmt.Sscanf(m[1], "%d", &rep); err != nil {
 			continue
@@ -53,7 +55,7 @@ func NewTileSizeEstimator(dir string) (*TileSizeEstimator, error) {
 			continue
 		}
 		var tileID int
-		if _, err := fmt.Sscanf(m[3], "%d", &tileID); err != nil {
+		if _, err := fmt.Sscanf(m[2], "%d", &tileID); err != nil {
 			continue
 		}
 		info, err := entry.Info()

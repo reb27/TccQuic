@@ -25,6 +25,20 @@ func TestTileSizeEstimatorUsesRepresentationForRequestedBitrate(t *testing.T) {
 	require.EqualValues(t, 30, estimator.AvgSize(1, model.HIGH_BITRATE))
 }
 
+func TestTileSizeEstimatorParsesTrackAsTileAndSuffixAsSegment(t *testing.T) {
+	dir := t.TempDir()
+	// Tile 42 has two different segments. Tile 7 is a deliberate inverse-key
+	// decoy: an implementation that swaps tile and segment returns 90 for 42.
+	writeSegmentFile(t, dir, "video_tiled_5_dash_track42_7.m4s", 10)
+	writeSegmentFile(t, dir, "video_tiled_5_dash_track42_8.m4s", 30)
+	writeSegmentFile(t, dir, "video_tiled_5_dash_track7_42.m4s", 90)
+
+	estimator, err := NewTileSizeEstimator(dir)
+	require.NoError(t, err)
+	require.EqualValues(t, 20, estimator.AvgSize(42, model.LOW_BITRATE))
+	require.EqualValues(t, 90, estimator.AvgSize(7, model.LOW_BITRATE))
+}
+
 func TestTileSizeEstimatorFallsBackByBitrateThenGlobal(t *testing.T) {
 	dir := t.TempDir()
 	writeSegmentFile(t, dir, "video_tiled_5_dash_track1_1.m4s", 10)

@@ -2,6 +2,7 @@ package test_client
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"main/src/test_client/session"
@@ -35,6 +36,7 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		ABRMode:                      envCfg.ABRMode,
 		BOLADebugPath:                envCfg.BOLADebugPath,
 		BOLAQmaxSegments:             envCfg.BOLAQmaxSegments,
+		LegacyDebugPath:              envCfg.LegacyDebugPath,
 	}
 
 	opts := session.Options{
@@ -46,13 +48,29 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 		FirstTile:       100,
 		LastTile:        177,
 	}
-	if firstSeg, lastSeg, firstTile, lastTile, ok := detectMediaBounds(); ok {
+	legacy := isLegacyABRMode(envCfg.ABRMode)
+	if legacy {
+		if firstSeg, lastSeg, firstTile, lastTile, mediaLayout, ok := detectLegacyMediaLayout(); ok {
+			opts.FirstSegment = firstSeg
+			opts.LastSegment = lastSeg
+			opts.FirstTile = firstTile
+			opts.LastTile = lastTile
+			opts.MediaLayout = mediaLayout
+		}
+	} else if firstSeg, lastSeg, firstTile, lastTile, ok := detectMediaBounds(); ok {
 		opts.FirstSegment = firstSeg
 		opts.LastSegment = lastSeg
 		opts.FirstTile = firstTile
 		opts.LastTile = lastTile
 	}
-	if segs, ok := detectValidSegmentIDs(); ok && len(segs) > 0 {
+	var segs []int
+	var ok bool
+	if legacy {
+		segs, ok = detectLegacyValidSegmentIDs()
+	} else {
+		segs, ok = detectValidSegmentIDs()
+	}
+	if ok && len(segs) > 0 {
 		opts.ValidSegments = segs
 		opts.FirstSegment = segs[0]
 		opts.LastSegment = segs[len(segs)-1]
@@ -77,5 +95,14 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 
 	if err := testSession.Run(); err != nil {
 		log.Printf("test session failed: %v", err)
+	}
+}
+
+func isLegacyABRMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "default", "legacy", "threshold":
+		return true
+	default:
+		return false
 	}
 }

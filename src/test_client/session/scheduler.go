@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,11 +29,12 @@ type TileScheduler struct {
 	firstRequestOnce      sync.Once
 	firstRequestTime      time.Time
 	lastDownloadedSegment *atomic.Int32
+	legacyReady           *legacyReadyTracker
 	sem                   Semaphore
 	wg                    sync.WaitGroup
 }
 
-func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collector *netstats.StatsCollector, metrics *metrics.Session, statsLogger *metrics.StatisticsLogger, sem Semaphore, startTime time.Time, lastDownloadedSegment *atomic.Int32) *TileScheduler {
+func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collector *netstats.StatsCollector, metrics *metrics.Session, statsLogger *metrics.StatisticsLogger, sem Semaphore, startTime time.Time, lastDownloadedSegment *atomic.Int32, legacyReady *legacyReadyTracker) *TileScheduler {
 	return &TileScheduler{
 		client:                client,
 		playback:              playback,
@@ -41,6 +43,7 @@ func NewTileScheduler(client RequestSender, playback *PlaybackSimulator, collect
 		statsLogger:           statsLogger,
 		startTime:             startTime,
 		lastDownloadedSegment: lastDownloadedSegment,
+		legacyReady:           legacyReady,
 		sem:                   sem,
 	}
 }
@@ -90,9 +93,16 @@ func BuildTileRequestPlan(segmentID int, cfg SegmentConfig, tiles []int, fovTrac
 		})
 	}
 
+	legacyConfig := strings.HasPrefix(cfg.ID, "legacy_")
 	sort.SliceStable(plan, func(i, j int) bool {
+		// Preserve the historical BOLA ordering exactly: FoV first, then
+		// bitrate, then tile ID. Legacy additionally resolves equal-quality
+		// non-FoV requests as Near-FoV before background.
 		if plan[i].InFOV != plan[j].InFOV {
 			return plan[i].InFOV
+		}
+		if legacyConfig && plan[i].NearFOV != plan[j].NearFOV {
+			return plan[i].NearFOV
 		}
 		if plan[i].Bitrate != plan[j].Bitrate {
 			return plan[i].Bitrate > plan[j].Bitrate
@@ -106,9 +116,22 @@ func BuildTileRequestPlan(segmentID int, cfg SegmentConfig, tiles []int, fovTrac
 	return plan
 }
 
+func spatialRequestRank(item TileRequestPlanItem) int {
+	if item.InFOV {
+		return 0
+	}
+	if item.NearFOV {
+		return 1
+	}
+	return 2
+}
+
 func (s *TileScheduler) ScheduleSegment(segmentID int, deadline time.Time, cfg SegmentConfig, tiles []int, fovTrace *fov.FOVTrace) {
 	plan := BuildTileRequestPlan(segmentID, cfg, tiles, fovTrace)
 	s.collector.RegisterSegment(segmentID, len(plan))
+	if s.legacyReady != nil {
+		s.legacyReady.RegisterSegment(segmentID, len(plan))
+	}
 	for _, item := range plan {
 		s.sem.Acquire()
 		s.wg.Add(1)
@@ -140,6 +163,7 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 		Segment:          segmentID,
 		Tile:             item.TileID,
 		FoV:              item.InFOV,
+		TileFirstLayout:  s.legacyReady != nil,
 		SemanticPriority: item.SemanticPriority,
 		Timeout:          timeoutMs,
 	}
@@ -187,6 +211,9 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 
 	s.metrics.DeadlineLateness.Record(segmentID, item.TileID, lateness)
 	onTime := response != nil && !timedOut
+	if s.legacyReady != nil {
+		s.legacyReady.RecordTileComplete(segmentID)
+	}
 	s.metrics.FOVHit.Add(segmentID, item.InFOV, onTime)
 	s.metrics.FOVGoodput.Add(responseTime, bytesReceived, item.InFOV, onTime)
 	s.metrics.Deadlines.Add(item.InFOV, !onTime)
@@ -212,12 +239,22 @@ func (s *TileScheduler) handleTile(segmentID int, deadline time.Time, item TileR
 	}
 
 	if s.statsLogger != nil {
-		s.statsLogger.Log(requestTime, request, responseTime-requestTime, timedOut, false, !timedOut, instaThroughput, sendBufferSec, tmrValue, item.InFOV, onTime, item.RequestOrder)
+		completed := !timedOut
+		if s.legacyReady != nil {
+			// Legacy validation distinguishes a response that completed after its
+			// deadline from a request that never produced a response. Preserve the
+			// historical BOLA statistics semantics by scoping this to Legacy.
+			completed = response != nil
+		}
+		s.statsLogger.Log(requestTime, request, responseTime-requestTime, timedOut, false, completed, instaThroughput, sendBufferSec, tmrValue, item.InFOV, onTime, item.RequestOrder)
 	}
 }
 
 func (s *TileScheduler) registerTimeout(segmentID int, item TileRequestPlanItem, deadline time.Time) {
 	s.collector.RecordSkipped(segmentID)
+	if s.legacyReady != nil {
+		s.legacyReady.RecordTileComplete(segmentID)
+	}
 	lateness := time.Since(deadline)
 	if lateness < 0 {
 		lateness = 0
@@ -234,7 +271,11 @@ func (s *TileScheduler) registerTimeout(segmentID int, item TileRequestPlanItem,
 	s.metrics.Deadlines.Add(item.InFOV, true)
 	s.metrics.FOVHit.Add(segmentID, item.InFOV, false)
 	if s.statsLogger != nil {
-		bufferSec := s.playback.GetBufferLevel(int(s.lastDownloadedSegment.Load())).Seconds()
+		lastReady := int(s.lastDownloadedSegment.Load())
+		if s.legacyReady != nil {
+			lastReady = s.legacyReady.ReadyThrough()
+		}
+		bufferSec := s.playback.GetBufferLevel(lastReady).Seconds()
 		s.statsLogger.Log(time.Since(s.startTime), model.VideoPacketRequest{
 			ID:               uuid.Nil,
 			Priority:         item.Priority,

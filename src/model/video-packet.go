@@ -19,6 +19,9 @@ type VideoPacketRequest struct {
 	Segment  int
 	Tile     int
 	FoV      bool // Indica se o tile está no campo de visão
+	// TileFirstLayout selects track<TILE>_<SEGMENT> lookup. It is set only by
+	// Legacy clients; false preserves the historical BOLA lookup and wire format.
+	TileFirstLayout bool
 	// Prioridade semântica pi (0..1) para VoI/WFQ: FoV=1.0, Near-FoV=0.6, Background=0.2. Se 0, deriva-se de FoV.
 	SemanticPriority float32
 	// [milliseconds] If this timeout elapses, do not send a response.
@@ -40,8 +43,17 @@ func (r *VideoPacketRequest) Write(writer io.Writer) (err error) {
 	// Followed by empty line
 	// Followed by optional data
 	_, err = fmt.Fprintf(writer,
-		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\nFoV: %t\nSemanticPriority: %g\nTimeout: %d\n\n",
+		"Priority: %d\nBitrate: %d\nSegment: %d\nTile: %d\nFoV: %t\nSemanticPriority: %g\nTimeout: %d\n",
 		r.Priority, r.Bitrate, r.Segment, r.Tile, r.FoV, r.SemanticPriority, r.Timeout)
+	if err != nil {
+		return err
+	}
+	if r.TileFirstLayout {
+		if _, err = fmt.Fprintln(writer, "TileFirstLayout: true"); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintln(writer)
 	return
 }
 
@@ -97,6 +109,8 @@ func ReadVideoPacketRequest(reader *bufio.Reader) (req *VideoPacketRequest, err 
 			request.Tile = intValue
 		case "FoV":
 			request.FoV = (value == "true")
+		case "TileFirstLayout":
+			request.TileFirstLayout = (value == "true")
 		case "SemanticPriority":
 			var f float64
 			if _, parseErr := fmt.Sscanf(value, "%f", &f); parseErr == nil {
@@ -203,8 +217,12 @@ func ReadVideoPacketResponse(reader *bufio.Reader) (res *VideoPacketResponse, er
 func EstimateTileSize(req *VideoPacketRequest) int64 {
 	basePath, _ := os.Getwd()
 	for _, rep := range estimateRepCandidates(req.Bitrate) {
+		first, second := req.Segment, req.Tile
+		if req.TileFirstLayout {
+			first, second = req.Tile, req.Segment
+		}
 		full := fmt.Sprintf("%s/data/segments/video_tiled_%d_dash_track%d_%d.m4s",
-			basePath, rep, req.Segment, req.Tile)
+			basePath, rep, first, second)
 		st, err := os.Stat(full)
 		if err == nil {
 			return st.Size()

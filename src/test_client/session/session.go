@@ -47,6 +47,7 @@ type Environment struct {
 	ABRMode                      string
 	BOLADebugPath                string
 	BOLAQmaxSegments             int
+	LegacyDebugPath              string
 }
 
 type TestSession struct {
@@ -63,6 +64,7 @@ type TestSession struct {
 	fovTrace      *fov.FOVTrace
 
 	lastDownloadedSegment atomic.Int32
+	legacyReady           *legacyReadyTracker
 	fallbackTileUniverse  []int
 }
 
@@ -89,19 +91,25 @@ func NewTestSession(client RequestSender, env Environment, opts Options) *TestSe
 		fallbackTileUniverse: buildTileUniverse(opts.FirstTile, opts.LastTile),
 	}
 	s.lastDownloadedSegment.Store(int32(opts.FirstSegment - 1))
+	if _, legacy := abr.(*bufferAwareABR); legacy {
+		s.legacyReady = newLegacyReadyTracker(opts.FirstSegment)
+	}
 	return s
 }
 
 func (s *TestSession) Run() error {
 	defer s.statsLogger.Close()
 	defer s.summaryLogger.Close()
+	if legacy, ok := s.abr.(*bufferAwareABR); ok {
+		defer legacy.Close()
+	}
 	s.playback.Start()
 	if err := s.loadFOVTrace(); err != nil {
 		log.Printf("Failed to load FOV trace from %s: %v (continuing without FOV prioritisation)", s.env.FOVTracePath, err)
 	}
 
 	startTime := time.Now()
-	scheduler := NewTileScheduler(s.client, s.playback, s.collector, s.metrics, s.statsLogger, s.semaphore, startTime, &s.lastDownloadedSegment)
+	scheduler := NewTileScheduler(s.client, s.playback, s.collector, s.metrics, s.statsLogger, s.semaphore, startTime, &s.lastDownloadedSegment, s.legacyReady)
 	if len(s.opts.ValidSegments) > 0 {
 		log.Printf("Starting test iteration for %d segment(s) present on disk (tiles %d to %d)", len(s.opts.ValidSegments), s.opts.FirstTile, s.opts.LastTile)
 	} else {
@@ -137,8 +145,7 @@ func (s *TestSession) segmentIDsInOrder() []int {
 }
 
 func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
-	bufferLevel := s.playback.GetBufferLevel(int(s.lastDownloadedSegment.Load()))
-	s.playback.WaitUntilWithinPrefetchWindow(segmentID)
+	bufferLevel, readyThrough := s.bufferLevelForDecision(segmentID)
 	avgThroughput := s.collector.AvgThroughput()
 	timeBudget := s.playback.GetTimeToReceive(segmentID)
 	if timeBudget <= 0 {
@@ -180,9 +187,27 @@ func (s *TestSession) processSegment(segmentID int, scheduler *TileScheduler) {
 		NearFOVTiles:    nearFOVTiles,
 		AllTiles:        segmentTiles,
 	}
+	if s.legacyReady != nil {
+		ctx.ReadyThroughSegment = readyThrough
+	}
 	cfg := s.abr.SelectConfig(ctx)
 	log.Printf("ABR: cfg=%s fov_bitrate=%d near_fov_bitrate=%d nonfov_bitrate=%d avg_tp=%.2f buffer=%.2f s", cfg.ID, cfg.FOVBitrate, cfg.NearFOVBitrate, cfg.NonFOVBitrate, avgThroughput, bufferLevel.Seconds())
 	scheduler.ScheduleSegment(segmentID, segmentDeadline, cfg, segmentTiles, s.fovTrace)
+}
+
+func (s *TestSession) bufferLevelForDecision(segmentID int) (time.Duration, int) {
+	if s.legacyReady != nil {
+		// Legacy must sample after a potentially long prefetch wait. Sampling
+		// before it made the ABR decision use stale buffer state.
+		s.playback.WaitUntilWithinPrefetchWindow(segmentID)
+		readyThrough := s.legacyReady.ReadyThroughForPlayback(s.playback.CurrentPlaybackSegment())
+		return s.playback.GetBufferLevel(readyThrough), readyThrough
+	}
+
+	// Preserve the existing BOLA sampling behaviour.
+	bufferLevel := s.playback.GetBufferLevel(int(s.lastDownloadedSegment.Load()))
+	s.playback.WaitUntilWithinPrefetchWindow(segmentID)
+	return bufferLevel, int(s.lastDownloadedSegment.Load())
 }
 
 func (s *TestSession) finalize(startTime time.Time, firstRequestTime time.Time) {
