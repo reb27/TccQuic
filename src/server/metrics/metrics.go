@@ -186,8 +186,10 @@ func (m *Metrics) InitSummary(path string) {
 		"ts_start", "ts_end", "duration_s",
 		"bytes_low", "bytes_med", "bytes_high",
 		"throughput_low_kbps", "throughput_med_kbps", "throughput_high_kbps",
+		"useful_goodput_low_kbps", "useful_goodput_med_kbps", "useful_goodput_high_kbps",
 		"class_share_low_pct", "class_share_med_pct", "class_share_high_pct",
 		"jain_fairness",
+		"jain_classes",
 		"drop_rate_low_pct", "drop_rate_med_pct", "drop_rate_high_pct",
 		"preemptions", "inversions",
 		"work_conserving_ratio_pct",
@@ -434,10 +436,25 @@ func (m *Metrics) WriteSummaryAndClose() {
 		jain = (sum * sum) / (3.0 * sum2)
 	}
 
-	// Throughput kbps
+	// Throughput kbps (todos os bytes enviados)
 	tL := (bl * 8.0 / 1000.0) / dur
 	tM := (bm * 8.0 / 1000.0) / dur
 	tH := (bh * 8.0 / 1000.0) / dur
+
+	// Useful Goodput kbps (apenas bytes entregues antes do deadline)
+	ugL := (float64(m.cls[model.LOW_PRIORITY].BytesOnTime) * 8.0 / 1000.0) / dur
+	ugM := (float64(m.cls[model.MEDIUM_PRIORITY].BytesOnTime) * 8.0 / 1000.0) / dur
+	ugH := (float64(m.cls[model.HIGH_PRIORITY].BytesOnTime) * 8.0 / 1000.0) / dur
+
+	// Jain entre classes (baseado em Useful Goodput)
+	ugTotal := ugL + ugM + ugH
+	jainC := 0.0
+	if ugTotal > 0 {
+		s2 := ugL*ugL + ugM*ugM + ugH*ugH
+		if s2 > 0 {
+			jainC = (ugTotal * ugTotal) / (3.0 * s2)
+		}
+	}
 
 	// Drop rate por classe (sobre enqueued)
 	dr := func(c Class) float64 {
@@ -462,8 +479,10 @@ func (m *Metrics) WriteSummaryAndClose() {
 		i64(int64(m.cls[model.MEDIUM_PRIORITY].BytesSent)),
 		i64(int64(m.cls[model.HIGH_PRIORITY].BytesSent)),
 		f64(tL), f64(tM), f64(tH),
+		f64(ugL), f64(ugM), f64(ugH),
 		f64(shL), f64(shM), f64(shH),
 		f64(jain),
+		f64(jainC),
 		f64(dr(model.LOW_PRIORITY)), f64(dr(model.MEDIUM_PRIORITY)), f64(dr(model.HIGH_PRIORITY)),
 		i64(m.gl.Preemptions), i64(m.gl.Inversions),
 		f64(wcr),

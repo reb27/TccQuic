@@ -21,6 +21,28 @@ BASE_LATENCY = int(os.environ['BASE_LATENCY'])
 FOV_TRACE_PATH = os.environ.get('FOV_TRACE_PATH', '')
 BOLA_DEBUG_PATH = os.environ.get('BOLA_DEBUG_PATH', '')
 BOLA_QMAX_SEGMENTS = os.environ.get('BOLA_QMAX_SEGMENTS', '')
+NUM_CLIENTS = int(os.environ.get('NUM_CLIENTS', '1'))
+# FOV_MIX: 'balanced' (33%W+33%N+33%S) ou 'wide_heavy' (50%W+33%N+17%S)
+FOV_MIX = os.environ.get('FOV_MIX', 'balanced')
+
+# Distribui traces de FoV entre N clientes conforme o mix configurado.
+def fov_traces_for_mix(data_dir: str, num_clients: int, mix: str) -> 'list[str]':
+    wide   = data_dir + '/data/user_fov_wide.csv'
+    normal = data_dir + '/data/user_fov.csv'
+    narrow = data_dir + '/data/user_fov_narrow.csv'
+    if num_clients == 1:
+        return [FOV_TRACE_PATH or normal]
+    if mix == 'wide_heavy':
+        # 50%W + 33%N + 17%S → para 6 clientes: 3W+2N+1S
+        n_wide   = max(1, round(num_clients * 0.50))
+        n_normal = max(1, round(num_clients * 0.33))
+        n_narrow = max(0, num_clients - n_wide - n_normal)
+    else:  # balanced
+        # 33%W + 33%N + 33%S → para 6 clientes: 2W+2N+2S
+        n_wide   = max(1, round(num_clients / 3))
+        n_normal = max(1, round(num_clients / 3))
+        n_narrow = max(0, num_clients - n_wide - n_normal)
+    return ([wide] * n_wide) + ([normal] * n_normal) + ([narrow] * n_narrow)
 
 print('SERVER_MODE=', SERVER_MODE)
 print('ABR_MODE=', ABR_MODE)
@@ -34,6 +56,8 @@ print('BASE_LATENCY=', BASE_LATENCY)
 print('FOV_TRACE_PATH=', FOV_TRACE_PATH)
 print('BOLA_DEBUG_PATH=', BOLA_DEBUG_PATH)
 print('BOLA_QMAX_SEGMENTS=', BOLA_QMAX_SEGMENTS)
+print('NUM_CLIENTS=', NUM_CLIENTS)
+print('FOV_MIX=', FOV_MIX)
 
 def safe_print(msg: str):
     try:
@@ -83,11 +107,11 @@ class Test():
     def __init__(self):
         net, server, clients = createMininet(NetParams(
             server=HostParams(bw=SERVER_BW, delay=DELAY, loss=LOSS),
-            clients=[HostParams(bw=CLIENT_BW)]))
+            clients=[HostParams(bw=CLIENT_BW)] * NUM_CLIENTS))
         self.server_policy: str = SERVER_MODE
         self.net: Mininet = net
         self.server: Host = server
-        self.client: Host = clients[0]
+        self.clients: 'list[Host]' = clients
         self.processes: 'dict[Host, Popen]' = {}
         self.iperf_server: 'Popen | None' = None
         self.iperf_client: 'Popen | None' = None
@@ -110,7 +134,7 @@ class Test():
             print('Starting load: ' + load)
             self.iperf_server = self.server.popen(
                 ['iperf', '-u', '-s', '-p', '5001'])
-            self.iperf_client = self.client.popen(
+            self.iperf_client = self.clients[0].popen(
                 ['iperf', '-u', '-c', self.server.IP(), '-p', '5001',
                  '-b', load, '-t', '99999'])
 
@@ -123,28 +147,34 @@ class Test():
             [dir + '/main', 'server', self.server_policy],
             cwd=dir,
             stderr=subprocess.STDOUT)
-        # Start client
-        client_env = os.environ.copy()
-        client_env['ABR_MODE'] = ABR_MODE
-        if FOV_TRACE_PATH:
-            client_env['FOV_TRACE_PATH'] = FOV_TRACE_PATH
-        if BOLA_DEBUG_PATH:
-            client_env['BOLA_DEBUG_PATH'] = BOLA_DEBUG_PATH
-        if BOLA_QMAX_SEGMENTS:
-            client_env['BOLA_QMAX_SEGMENTS'] = BOLA_QMAX_SEGMENTS
-        self.processes[self.client] = self.client.popen(
-            [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM),
-             str(BASE_LATENCY)],
-            cwd=dir,
-            env=client_env,
-            stderr=subprocess.STDOUT)
-        
+
+        # Distribui traces de FoV entre clientes conforme FOV_MIX
+        fov_traces = fov_traces_for_mix(dir, NUM_CLIENTS, FOV_MIX)
+
+        # Start N clients em paralelo
+        for i, client in enumerate(self.clients):
+            client_env = os.environ.copy()
+            client_env['ABR_MODE'] = ABR_MODE
+            client_env['FOV_TRACE_PATH'] = fov_traces[i] if i < len(fov_traces) else fov_traces[-1]
+            if BOLA_DEBUG_PATH:
+                client_env['BOLA_DEBUG_PATH'] = BOLA_DEBUG_PATH
+            if BOLA_QMAX_SEGMENTS:
+                client_env['BOLA_QMAX_SEGMENTS'] = BOLA_QMAX_SEGMENTS
+            self.processes[client] = client.popen(
+                [dir + '/main', 'test-client', self.server.IP(), str(PARALELLISM),
+                 str(BASE_LATENCY)],
+                cwd=dir,
+                env=client_env,
+                stderr=subprocess.STDOUT)
+            safe_print(f'[client-{i}] fov={fov_traces[i] if i < len(fov_traces) else fov_traces[-1]}')
+
+        expected = 1 + NUM_CLIENTS
         for host, line in pmonitor(self.processes):
             if line:
                 if line.endswith('\n'):
                     line = line[:-1]
                 safe_print('[%s] %s' % (host, line))
-            if len(self.processes) != 2:
+            if len(self.processes) != expected:
                 break
 
     def __finalize(self):

@@ -31,6 +31,9 @@ DELAY="2"
 LOAD="10"
 BASE_LATENCY="700"
 FOV_MODE="normal"
+NUM_CLIENTS="1"
+FOV_MIX="balanced"
+WFQ_BETA="1.0"
 NO_BUILD=0
 IP=
 LOG_DIR=
@@ -54,6 +57,9 @@ while [[ "$#" > 0 ]]; do
     --delay) DELAY="$2"                     ; shift 2 ;;
     --load) LOAD="$2"                       ; shift 2 ;;
     --fov)   FOV_MODE="$2"                  ; shift 2 ;;
+    --clients) NUM_CLIENTS="$2"             ; shift 2 ;;
+    --fov-mix) FOV_MIX="$2"                ; shift 2 ;;
+    --beta) WFQ_BETA="$2"                   ; shift 2 ;;
     -o)     LOG_DIR="$2"                    ; shift 2 ;;
     --no-build) NO_BUILD=1                  ; shift   ;;
     -*)     showUsage ; exit 1              ; shift   ;;
@@ -212,6 +218,9 @@ delay_ms=$DELAY
 background_load_pct=$LOAD
 base_latency_ms=$BASE_LATENCY
 fov_mode=$FOV_MODE
+num_clients=$NUM_CLIENTS
+fov_mix=$FOV_MIX
+wfq_beta=$WFQ_BETA
 BOLA_DEBUG_PATH=$BOLA_DEBUG_PATH
 BOLA_QMAX_SEGMENTS=$BOLA_QMAX_SEGMENTS
 LEGACY_DEBUG_PATH=$LEGACY_DEBUG_PATH
@@ -225,6 +234,7 @@ withSSH "cd $REMOTE_DIR && \
             DELAY='$DELAY' LOAD='$LOAD' BASE_LATENCY='$BASE_LATENCY' \
             FOV_TRACE_PATH='$FOV_TRACE_PATH' BOLA_DEBUG_PATH='$BOLA_DEBUG_PATH' \
             BOLA_QMAX_SEGMENTS='$BOLA_QMAX_SEGMENTS' \
+            NUM_CLIENTS='$NUM_CLIENTS' FOV_MIX='$FOV_MIX' WFQ_BETA='$WFQ_BETA' \
             LEGACY_DEBUG_PATH='$LEGACY_DEBUG_PATH' TEST_CLIENT_SEGMENT_LIMIT='$TEST_CLIENT_SEGMENT_LIMIT' \
             ./server_scheduler_test.py" 2>&1 | tee "$LOG_DIR/stdout"
 PIPE_RC=( "${PIPESTATUS[@]}" )

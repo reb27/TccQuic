@@ -3,6 +3,8 @@ package stream_handler
 import (
 	"log"
 	"math"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -323,18 +325,28 @@ func (s *Scheduler) pickWFQ() task {
 	return t
 }
 
+// wfqBeta lê WFQ_BETA do ambiente (padrão 1.0; valores válidos: 0.5, 1.0, 2.0).
+func wfqBeta() float64 {
+	if v := os.Getenv("WFQ_BETA"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return 1.0
+}
+
 // recalcWFQWeights implementa o Algoritmo 1 do paper para P=3 classes.
 // Roda dentro do lock de nextTaskBlocking (via pickWFQ), portanto acessa
 // wfqBytes e wfqPhi sem necessidade de lock adicional.
 func (s *Scheduler) recalcWFQWeights() {
 	const (
 		K      = 1.0  // ganho global
-		beta   = 1.0  // sensibilidade ao workload
 		alpha  = 0.3  // taxa EMA
 		epsMin = 0.05 // share mínimo por fila
 		epsMax = 0.05 // headroom máximo
 		Wtotal = 6.0  // 1+2+3 — escala dos pesos de saída
 	)
+	beta := wfqBeta()
 	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda)
 	phiBase := [3]float64{1.0 / Wtotal, 2.0 / Wtotal, 3.0 / Wtotal}
 
