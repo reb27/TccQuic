@@ -2,6 +2,7 @@ package session
 
 import (
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -39,11 +40,14 @@ type bufferAwareABR struct {
 }
 
 const (
+	// Kept for validation of the contiguous Legacy buffer metric. Throughput
+	// selection no longer gates quality on these levels.
 	legacyMediumBufferLevel = 1 * time.Second
-	// Decisions are made before scheduling the next segment. With a three-
-	// segment prefetch window, at most two complete future segments can already
-	// be buffered at that point, so 2 s is the highest reachable decision level.
-	legacyHighBufferLevel = 2 * time.Second
+	legacyHighBufferLevel   = 2 * time.Second
+	// Conservative margins over the measured EWMA. This keeps Legacy
+	// throughput-based while avoiding upgrades on barely sufficient samples.
+	legacyMediumThroughputMargin = 1.05
+	legacyHighThroughputMargin   = 1.10
 	// Measured over segments 1..60 with the normal FoV trace. These values are
 	// only used if the on-disk media estimator is unavailable.
 	legacyFallbackMediumThreshold = 381_551.0
@@ -91,7 +95,7 @@ func SelectABRController(env Environment) ABRController {
 
 func (c *bufferAwareABR) SelectConfig(ctx SegmentContext) SegmentConfig {
 	mediumThreshold, highThreshold := c.thresholds(ctx)
-	fovBitrate := c.selectBitrate(ctx.AvgThroughput, ctx.BufferLevel, mediumThreshold, highThreshold)
+	fovBitrate := c.selectBitrate(ctx.AvgThroughput, mediumThreshold, highThreshold)
 	nearFOVBitrate := model.LOW_BITRATE
 	if fovBitrate == model.HIGH_BITRATE {
 		nearFOVBitrate = model.MEDIUM_BITRATE
@@ -110,15 +114,41 @@ func (c *bufferAwareABR) Close() error {
 	return c.debug.Close()
 }
 
-func (c *bufferAwareABR) selectBitrate(avgThroughput float64, bufferLevel time.Duration, mediumThreshold, highThreshold float64) model.Bitrate {
-	if bufferLevel < legacyMediumBufferLevel || avgThroughput < mediumThreshold {
-		log.Printf("ABR (Legacy): LOW buffer=%v throughput=%.0f medium_threshold=%.0f", bufferLevel, avgThroughput, mediumThreshold)
+func (c *bufferAwareABR) selectBitrate(avgThroughput float64, mediumThreshold, highThreshold float64) model.Bitrate {
+	if !validLegacyThroughputInput(avgThroughput, mediumThreshold, highThreshold) {
+		log.Printf("ABR (Legacy): LOW invalid throughput input throughput=%.0f medium_threshold=%.0f high_threshold=%.0f", avgThroughput, mediumThreshold, highThreshold)
 		return model.LOW_BITRATE
 	}
-	if bufferLevel >= legacyHighBufferLevel && avgThroughput >= highThreshold {
+	mediumRequired := legacyRequiredMediumThroughput(mediumThreshold)
+	if avgThroughput < mediumRequired {
+		log.Printf("ABR (Legacy): LOW throughput=%.0f medium_required=%.0f medium_threshold=%.0f", avgThroughput, mediumRequired, mediumThreshold)
+		return model.LOW_BITRATE
+	}
+	if avgThroughput >= legacyRequiredHighThroughput(highThreshold) {
 		return model.HIGH_BITRATE
 	}
 	return model.MEDIUM_BITRATE
+}
+
+func legacyRequiredMediumThroughput(mediumThreshold float64) float64 {
+	return mediumThreshold * legacyMediumThroughputMargin
+}
+
+func legacyRequiredHighThroughput(highThreshold float64) float64 {
+	return highThreshold * legacyHighThroughputMargin
+}
+
+func validLegacyThroughputInput(avgThroughput, mediumThreshold, highThreshold float64) bool {
+	return avgThroughput > 0 &&
+		mediumThreshold > 0 &&
+		highThreshold >= mediumThreshold &&
+		isFinite(avgThroughput) &&
+		isFinite(mediumThreshold) &&
+		isFinite(highThreshold)
+}
+
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func (c *bufferAwareABR) thresholds(ctx SegmentContext) (medium, high float64) {

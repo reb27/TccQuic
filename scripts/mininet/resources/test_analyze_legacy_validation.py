@@ -52,6 +52,25 @@ class LegacyAnalysisTest(unittest.TestCase):
         errors = legacy_analysis.validate(data, summary)
         self.assertTrue(any("violates rule" in error for error in errors), errors)
 
+    def test_validate_treats_invalid_throughput_as_low(self):
+        data = self.valid_data()
+        data["good"]["decisions"][1]["avg_throughput_bps"] = "nan"
+        data["good"]["decisions"][1]["tier"] = "MED"
+        data["good"]["decisions"][1]["fov_bitrate"] = "5"
+        data["good"]["decisions"][1]["near_fov_bitrate"] = "3"
+        summary, _ = legacy_analysis.summarize(data)
+
+        errors = legacy_analysis.validate(data, summary)
+        self.assertTrue(any("violates rule" in error for error in errors), errors)
+
+    def test_validate_rejects_invalid_thresholds(self):
+        data = self.valid_data()
+        data["good"]["decisions"][1]["threshold_high_bps"] = "nan"
+        summary, _ = legacy_analysis.summarize(data)
+
+        errors = legacy_analysis.validate(data, summary)
+        self.assertTrue(any("invalid thresholds" in error for error in errors), errors)
+
     def test_validate_rejects_unreachable_buffer_and_incomplete_medium_tiers(self):
         data = self.valid_data()
         data["medium"]["decisions"][4]["buffer_s"] = "2.1"
@@ -68,8 +87,8 @@ class LegacyAnalysisTest(unittest.TestCase):
     def decision(segment, tier):
         values = {
             "LOW": ("0", "0", "3", "3"),
-            "MED": ("1", "10", "5", "3"),
-            "HIGH": ("2", "20", "10", "5"),
+            "MED": ("0", "10.5", "5", "3"),
+            "HIGH": ("0", "22", "10", "5"),
         }
         buffer_s, throughput, fov_bitrate, near_bitrate = values[tier]
         return {

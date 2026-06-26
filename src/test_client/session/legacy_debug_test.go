@@ -19,7 +19,7 @@ func TestLegacyDebugWritesOneCompleteDecisionRow(t *testing.T) {
 		SegmentID:           7,
 		BufferLevel:         legacyHighBufferLevel,
 		ReadyThroughSegment: 6,
-		AvgThroughput:       legacyFallbackHighThreshold,
+		AvgThroughput:       legacyRequiredHighThroughput(legacyFallbackHighThreshold),
 	})
 	require.NoError(t, abr.Close())
 

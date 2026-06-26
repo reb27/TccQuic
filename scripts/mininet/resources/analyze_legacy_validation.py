@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import sys
 from collections import Counter, defaultdict
@@ -14,6 +15,8 @@ BITRATE_TIER = {3: "LOW", 5: "MED", 10: "HIGH"}
 ZONES = ("fov", "near_fov", "background")
 MEDIUM_BUFFER_S = 1.0
 HIGH_BUFFER_S = 2.0
+MEDIUM_THROUGHPUT_MARGIN = 1.05
+HIGH_THROUGHPUT_MARGIN = 1.10
 
 
 def as_bool(value: str) -> bool:
@@ -261,12 +264,19 @@ def validate(data: dict[str, dict], summary: list[dict]) -> list[str]:
             buffer_s = float(row["buffer_s"])
             medium_threshold = float(row["threshold_med_bps"])
             high_threshold = float(row["threshold_high_bps"])
-            if medium_threshold <= 0 or high_threshold < medium_threshold:
+            if (
+                not math.isfinite(medium_threshold)
+                or not math.isfinite(high_threshold)
+                or medium_threshold <= 0
+                or high_threshold < medium_threshold
+            ):
                 errors.append(f"{condition} segment {segment}: invalid thresholds")
                 continue
-            if buffer_s < MEDIUM_BUFFER_S or throughput < medium_threshold:
+            if not math.isfinite(throughput) or throughput <= 0:
                 expected_tier = "LOW"
-            elif buffer_s >= HIGH_BUFFER_S and throughput >= high_threshold:
+            elif throughput < medium_threshold * MEDIUM_THROUGHPUT_MARGIN:
+                expected_tier = "LOW"
+            elif throughput >= high_threshold * HIGH_THROUGHPUT_MARGIN:
                 expected_tier = "HIGH"
             else:
                 expected_tier = "MED"

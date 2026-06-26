@@ -1,6 +1,7 @@
 package session
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -21,22 +22,22 @@ func TestLegacyNearFOVBitrateFollowsFOVHighOnly(t *testing.T) {
 	}{
 		{
 			name:        "fov_high_promotes_near_fov_to_medium",
-			throughput:  legacyFallbackHighThreshold,
-			buffer:      legacyHighBufferLevel,
+			throughput:  legacyRequiredHighThroughput(legacyFallbackHighThreshold),
+			buffer:      0,
 			wantFOV:     model.HIGH_BITRATE,
 			wantNearFOV: model.MEDIUM_BITRATE,
 		},
 		{
 			name:        "fov_medium_keeps_near_fov_low",
-			throughput:  legacyFallbackMediumThreshold,
+			throughput:  legacyRequiredMediumThroughput(legacyFallbackMediumThreshold),
 			buffer:      2 * time.Second,
 			wantFOV:     model.MEDIUM_BITRATE,
 			wantNearFOV: model.LOW_BITRATE,
 		},
 		{
-			name:        "low_buffer_keeps_near_fov_low",
-			throughput:  legacyFallbackHighThreshold,
-			buffer:      legacyMediumBufferLevel - time.Nanosecond,
+			name:        "low_fov_keeps_near_fov_low",
+			throughput:  legacyRequiredMediumThroughput(legacyFallbackMediumThreshold) - 1,
+			buffer:      10 * time.Second,
 			wantFOV:     model.LOW_BITRATE,
 			wantNearFOV: model.LOW_BITRATE,
 		},
@@ -64,12 +65,10 @@ func TestLegacyThresholdBoundariesAndSpatialConfiguration(t *testing.T) {
 		buffer     time.Duration
 		want       model.Bitrate
 	}{
-		{"below_medium_throughput", legacyFallbackMediumThreshold - 1, legacyMediumBufferLevel, model.LOW_BITRATE},
-		{"at_medium_throughput", legacyFallbackMediumThreshold, legacyMediumBufferLevel, model.MEDIUM_BITRATE},
-		{"below_medium_buffer", legacyFallbackHighThreshold, legacyMediumBufferLevel - time.Nanosecond, model.LOW_BITRATE},
-		{"below_high_throughput", legacyFallbackHighThreshold - 1, legacyHighBufferLevel, model.MEDIUM_BITRATE},
-		{"below_high_buffer", legacyFallbackHighThreshold, legacyHighBufferLevel - time.Nanosecond, model.MEDIUM_BITRATE},
-		{"at_high_limits", legacyFallbackHighThreshold, legacyHighBufferLevel, model.HIGH_BITRATE},
+		{"below_medium_margin", legacyRequiredMediumThroughput(legacyFallbackMediumThreshold) - 1, 0, model.LOW_BITRATE},
+		{"at_medium_margin", legacyRequiredMediumThroughput(legacyFallbackMediumThreshold), 0, model.MEDIUM_BITRATE},
+		{"below_high_margin", legacyRequiredHighThroughput(legacyFallbackHighThreshold) - 1, 0, model.MEDIUM_BITRATE},
+		{"at_high_margin", legacyRequiredHighThroughput(legacyFallbackHighThreshold), 0, model.HIGH_BITRATE},
 	}
 
 	for _, tt := range tests {
@@ -86,14 +85,68 @@ func TestLegacyThresholdBoundariesAndSpatialConfiguration(t *testing.T) {
 	}
 }
 
+func TestLegacyBufferDoesNotInfluenceThroughputDecision(t *testing.T) {
+	abr := newLegacyABRWithEstimator(nil)
+
+	tests := []struct {
+		name       string
+		throughput float64
+		want       model.Bitrate
+	}{
+		{"low_throughput", legacyRequiredMediumThroughput(legacyFallbackMediumThreshold) - 1, model.LOW_BITRATE},
+		{"medium_throughput", legacyRequiredMediumThroughput(legacyFallbackMediumThreshold), model.MEDIUM_BITRATE},
+		{"high_throughput", legacyRequiredHighThroughput(legacyFallbackHighThreshold), model.HIGH_BITRATE},
+	}
+
+	buffers := []time.Duration{0, time.Nanosecond, time.Second, 10 * time.Second}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, buffer := range buffers {
+				cfg := abr.SelectConfig(SegmentContext{
+					AvgThroughput: tt.throughput,
+					BufferLevel:   buffer,
+				})
+				require.Equal(t, tt.want, cfg.FOVBitrate, "buffer=%v", buffer)
+			}
+		})
+	}
+}
+
+func TestLegacyInvalidThroughputOrThresholdsFallBackToLow(t *testing.T) {
+	abr := newLegacyABRWithEstimator(nil)
+
+	tests := []struct {
+		name            string
+		avgThroughput   float64
+		mediumThreshold float64
+		highThreshold   float64
+	}{
+		{"zero_throughput", 0, legacyFallbackMediumThreshold, legacyFallbackHighThreshold},
+		{"negative_throughput", -1, legacyFallbackMediumThreshold, legacyFallbackHighThreshold},
+		{"nan_throughput", math.NaN(), legacyFallbackMediumThreshold, legacyFallbackHighThreshold},
+		{"infinite_throughput", math.Inf(1), legacyFallbackMediumThreshold, legacyFallbackHighThreshold},
+		{"zero_medium_threshold", legacyFallbackHighThreshold, 0, legacyFallbackHighThreshold},
+		{"nan_medium_threshold", legacyFallbackHighThreshold, math.NaN(), legacyFallbackHighThreshold},
+		{"zero_high_threshold", legacyFallbackHighThreshold, legacyFallbackMediumThreshold, 0},
+		{"high_below_medium_threshold", legacyFallbackHighThreshold, legacyFallbackHighThreshold, legacyFallbackMediumThreshold},
+		{"infinite_high_threshold", legacyFallbackHighThreshold, legacyFallbackMediumThreshold, math.Inf(1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, model.LOW_BITRATE, abr.selectBitrate(tt.avgThroughput, tt.mediumThreshold, tt.highThreshold))
+		})
+	}
+}
+
 func TestLegacyTransitionsLowMediumHighMediumLow(t *testing.T) {
 	abr := newLegacyABRWithEstimator(nil)
 	contexts := []SegmentContext{
-		{AvgThroughput: legacyFallbackMediumThreshold - 1, BufferLevel: legacyMediumBufferLevel},
-		{AvgThroughput: legacyFallbackMediumThreshold, BufferLevel: legacyMediumBufferLevel},
-		{AvgThroughput: legacyFallbackHighThreshold, BufferLevel: legacyHighBufferLevel},
-		{AvgThroughput: legacyFallbackHighThreshold - 1, BufferLevel: legacyHighBufferLevel},
-		{AvgThroughput: legacyFallbackMediumThreshold - 1, BufferLevel: legacyMediumBufferLevel},
+		{AvgThroughput: legacyRequiredMediumThroughput(legacyFallbackMediumThreshold) - 1, BufferLevel: 10 * time.Second},
+		{AvgThroughput: legacyRequiredMediumThroughput(legacyFallbackMediumThreshold), BufferLevel: 0},
+		{AvgThroughput: legacyRequiredHighThroughput(legacyFallbackHighThreshold), BufferLevel: 0},
+		{AvgThroughput: legacyRequiredHighThroughput(legacyFallbackHighThreshold) - 1, BufferLevel: 10 * time.Second},
+		{AvgThroughput: legacyRequiredMediumThroughput(legacyFallbackMediumThreshold) - 1, BufferLevel: 0},
 	}
 	want := []model.Bitrate{model.LOW_BITRATE, model.MEDIUM_BITRATE, model.HIGH_BITRATE, model.MEDIUM_BITRATE, model.LOW_BITRATE}
 
@@ -102,7 +155,7 @@ func TestLegacyTransitionsLowMediumHighMediumLow(t *testing.T) {
 	}
 }
 
-func TestLegacyHighBufferThresholdIsReachableInsidePrefetchWindow(t *testing.T) {
+func TestLegacyPlaybackBufferSampleDoesNotGateHighDecision(t *testing.T) {
 	playback := NewPlaybackSimulator(time.Second, 0, 1, 5)
 	playback.currentPlaybackSegment = 1
 	now := time.Now()
@@ -116,7 +169,11 @@ func TestLegacyHighBufferThresholdIsReachableInsidePrefetchWindow(t *testing.T) 
 	require.Equal(t, legacyHighBufferLevel, buffer)
 	abr := newLegacyABRWithEstimator(nil)
 	require.Equal(t, model.HIGH_BITRATE, abr.SelectConfig(SegmentContext{
-		AvgThroughput: legacyFallbackHighThreshold,
+		AvgThroughput: legacyRequiredHighThroughput(legacyFallbackHighThreshold),
+		BufferLevel:   0,
+	}).FOVBitrate)
+	require.Equal(t, model.HIGH_BITRATE, abr.SelectConfig(SegmentContext{
+		AvgThroughput: legacyRequiredHighThroughput(legacyFallbackHighThreshold),
 		BufferLevel:   buffer,
 	}).FOVBitrate)
 }
