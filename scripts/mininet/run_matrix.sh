@@ -28,6 +28,7 @@ show_usage() {
     echo "  --cbw N           Bandwidth cliente Mbps (padrão: 60)"
     echo "  --parallelism N   Paralelismo do cliente (padrão: 120)"
     echo "  --dry-run         Mostra runs sem executar"
+    echo "  --resume          Retoma o matrix-NNN mais recente, pulando runs já feitos"
 }
 
 IP=
@@ -36,6 +37,7 @@ SERVER_BW=60
 CLIENT_BW=60
 PARALLELISM=120
 DRY_RUN=0
+RESUME=0
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -44,6 +46,7 @@ while [[ "$#" -gt 0 ]]; do
     --cbw)         CLIENT_BW="$2"   ; shift 2 ;;
     --parallelism) PARALLELISM="$2" ; shift 2 ;;
     --dry-run)     DRY_RUN=1        ; shift   ;;
+    --resume)      RESUME=1         ; shift   ;;
     -h|--help)     show_usage ; exit 0 ;;
     -*)            show_usage ; exit 1 ;;
     *)             IP="$1"          ; shift   ;;
@@ -54,13 +57,25 @@ if [[ -z "$IP" ]]; then show_usage ; exit 1; fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-# Diretório de saída com auto-incremento
-LOG_NUMBER=1
-while true; do
-    MATRIX_DIR=$(printf "../../logs/matrix-%03d" "$LOG_NUMBER")
-    [[ ! -e "$MATRIX_DIR" ]] && break
-    LOG_NUMBER=$((LOG_NUMBER + 1))
-done
+# Diretório de saída. Com --resume, reutiliza o matrix-NNN mais recente
+# (retoma após queda de energia); senão, cria um novo com auto-incremento.
+if [[ "$RESUME" == 1 ]]; then
+    MATRIX_DIR=$(ls -d ../../logs/matrix-[0-9][0-9][0-9] 2>/dev/null | sort | tail -1)
+    if [[ -z "$MATRIX_DIR" ]]; then
+        echo "--resume pedido mas nenhum logs/matrix-NNN existe; criando novo."
+        RESUME=0
+    else
+        echo "resume: reutilizando $MATRIX_DIR (pulando runs já concluídos)"
+    fi
+fi
+if [[ -z "${MATRIX_DIR:-}" ]]; then
+    LOG_NUMBER=1
+    while true; do
+        MATRIX_DIR=$(printf "../../logs/matrix-%03d" "$LOG_NUMBER")
+        [[ ! -e "$MATRIX_DIR" ]] && break
+        LOG_NUMBER=$((LOG_NUMBER + 1))
+    done
+fi
 mkdir -p "$MATRIX_DIR"
 
 PURPLE='\033[0;35m'
@@ -122,11 +137,28 @@ for scenario_spec in "${SCENARIOS[@]}"; do
                             continue
                         fi
 
+                        # --resume: se este run já produziu dados de cliente, pula.
+                        if [[ "$RESUME" == 1 ]] && \
+                           compgen -G "$run_dir/statistics-summary-*.csv" > /dev/null 2>&1; then
+                            echo -e "${GREEN}[skip] $label rep${rep} já concluído${NC}"
+                            continue
+                        fi
+
                         mkdir -p "$run_dir"
 
-                        # Primeiro run faz o build; os demais reutilizam o binário
-                        NO_BUILD_FLAG=""
-                        [[ "$run_idx" -gt 1 ]] && NO_BUILD_FLAG="--no-build"
+                        # Limpa estado residual do Mininet antes de cada run
+                        ssh -q -oBatchMode=yes -oConnectTimeout=10 "mininet@$IP" \
+                            "sudo mn -c 2>/dev/null; sudo pkill -f server_scheduler_test || true" \
+                            2>/dev/null || true
+
+                        # A PRIMEIRA run efetivamente executada compila e reenvia
+                        # (essencial no --resume: a VM pode ter perdido /tmp na queda).
+                        # As seguintes reutilizam o binário na VM.
+                        NO_BUILD_FLAG="--no-build"
+                        if [[ "${DID_BUILD:-0}" != 1 ]]; then
+                            NO_BUILD_FLAG=""
+                            DID_BUILD=1
+                        fi
 
                         set +e
                         ./server_scheduler_test.sh \

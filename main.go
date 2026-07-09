@@ -3,9 +3,12 @@ package main
 import (
 	"main/src/client"
 	"main/src/server"
+	"main/src/server/metrics"
 	"main/src/test_client"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 )
 
 func main() {
@@ -21,6 +24,19 @@ func main() {
 
 		queuePolicy := os.Args[2]
 		server := server.NewServer("0.0.0.0", port, queuePolicy)
+
+		// O harness do Mininet encerra o servidor com SIGTERM após os clientes
+		// terminarem. Sem capturar o sinal, o processo morre antes de gravar o
+		// server_summary.csv. Capturamos SIGTERM/SIGINT para liberar o resumo
+		// (idempotente via closeOnce) antes de sair.
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			metrics.M().WriteSummaryAndClose()
+			os.Exit(0)
+		}()
+
 		server.Start()
 	} else if arg == "test-client" {
 		// Uso: main test-client [ip] parallelism baseLatency

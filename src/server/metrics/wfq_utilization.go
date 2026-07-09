@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"main/src/model"
 )
 
 type WFQUtil struct {
@@ -176,17 +178,24 @@ func (u *WFQUtil) loop() {
 			if u.adapted {
 				adaptedStr = "1"
 			}
+			// Escreve por semântica de classe (low=fundo, medium=vizinhança, high=FoV),
+			// independentemente da ordem do iota em model.Priority. Antes indexávamos
+			// por [0],[1],[2] direto, o que colocava HIGH_PRIORITY (iota=0, FoV) na
+			// coluna "low" — bug de nomenclatura detectado ao investigar Fig 2.
+			lowC := ClassInt(model.LOW_PRIORITY)
+			medC := ClassInt(model.MEDIUM_PRIORITY)
+			highC := ClassInt(model.HIGH_PRIORITY)
 			rec := []string{
 				now.Format(time.RFC3339Nano),
-				f614(u.weights[0]), f614(u.weights[1]), f614(u.weights[2]),
-				f614(obs[0]), f614(obs[1]), f614(obs[2]),
-				f614(err[0]), f614(err[1]), f614(err[2]),
+				f614(u.weights[lowC]), f614(u.weights[medC]), f614(u.weights[highC]),
+				f614(obs[lowC]), f614(obs[medC]), f614(obs[highC]),
+				f614(err[lowC]), f614(err[medC]), f614(err[highC]),
 				f614(mae),
-				strconv.FormatInt(u.bytes[0], 10),
-				strconv.FormatInt(u.bytes[1], 10),
-				strconv.FormatInt(u.bytes[2], 10),
-				f614(u.rawWeights[0]), f614(u.rawWeights[1]), f614(u.rawWeights[2]),
-				f614(ratio[0]), f614(ratio[1]), f614(ratio[2]),
+				strconv.FormatInt(u.bytes[lowC], 10),
+				strconv.FormatInt(u.bytes[medC], 10),
+				strconv.FormatInt(u.bytes[highC], 10),
+				f614(u.rawWeights[lowC]), f614(u.rawWeights[medC]), f614(u.rawWeights[highC]),
+				f614(ratio[lowC]), f614(ratio[medC]), f614(ratio[highC]),
 				adaptedStr,
 			}
 			_ = u.w.Write(rec)

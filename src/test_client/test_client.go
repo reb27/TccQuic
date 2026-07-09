@@ -96,6 +96,14 @@ func StartTestClient(serverURL string, serverPort int, parallelism int, baseLate
 	if err := testSession.Run(); err != nil {
 		log.Printf("test session failed: %v", err)
 	}
+
+	// Fecha a conexão QUIC graciosamente para que o servidor detecte o fim
+	// da sessão via connection.Context().Err() e escreva o server_summary.csv.
+	// Sem isso, o MaxIdleTimeout (500min) mantém a conexão "ativa" indefinidamente
+	// e o Stop()/WriteSummaryAndClose() do servidor nunca é acionado.
+	if err := client.connection.CloseWithError(0, "session complete"); err != nil {
+		log.Printf("close connection: %v", err)
+	}
 }
 
 func isLegacyABRMode(mode string) bool {

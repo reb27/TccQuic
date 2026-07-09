@@ -50,15 +50,21 @@ type task struct {
 type Scheduler struct {
 	policy QueuePolicy
 
-	// filas por prioridade (low=0, med=1, high=2) — usadas por FIFO, SP, VoI_SP
+	// filas por prioridade — indexadas por model.Priority
+	// (HIGH=0, MED=1, LOW=2, ordem do iota) — usadas por FIFO, SP, VoI_SP
 	queues [int(model.PRIORITY_LEVEL_COUNT)][]task
 
-	// WFQ original (virtual finish time) — usado apenas quando policy == PolicyWFQ
-	wfqSched scheduler.Scheduler[task]
-	wfqCount int // contagem de itens no WFQ (para totalQueuedLocked)
+	// WFQ (virtual finish time) — usado apenas quando policy == PolicyWFQ.
+	// O wfqScheduler exige UMA entry persistente por fluxo (o virtual finish
+	// acumula por entry); usamos 1 entry por CLASSE + uma fila FIFO por classe.
+	wfqSched   scheduler.Scheduler[int]                                 // userdata = int(model.Priority)
+	wfqEntries [int(model.PRIORITY_LEVEL_COUNT)]scheduler.SchedulerEntry[int]
+	wfqQueues  [int(model.PRIORITY_LEVEL_COUNT)][]task                  // FIFO interna por classe
+	wfqCount   int                                                      // total enfileirado no WFQ
 
 	// Pesos dinâmicos WFQ (Algoritmo 1 do paper)
-	wfqBytes        [3]int64   // bytes acumulados na rodada atual (LOW=0, MED=1, HIGH=2)
+	// Todos os arrays abaixo são indexados por model.Priority (HIGH=0, MED=1, LOW=2).
+	wfqBytes        [3]int64   // bytes acumulados na rodada atual
 	wfqPhi          [3]float64 // share normalizado φ atual por classe (estado EMA)
 	wfqRoundDequeues int       // quantidade de dequeues na rodada atual
 
@@ -82,9 +88,17 @@ func NewTaskScheduler(policy QueuePolicy) TaskScheduler {
 
 	// Inicializar WFQ com pesos dinâmicos
 	if policy == PolicyWFQ {
-		s.wfqSched = scheduler.NewWFQ[task](10000) // capacidade alta
-		// φ_base_p = W_p / W_total  →  {1/6, 2/6, 3/6}
-		s.wfqPhi = [3]float64{1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0}
+		s.wfqSched = scheduler.NewWFQ[int](16) // 1 entry persistente por classe
+		// φ_base_p = W_p / W_total — indexado por model.Priority (HIGH=0).
+		// FoV(HIGH)=3/6, vizinhança(MED)=2/6, fundo(LOW)=1/6.
+		s.wfqPhi[int(model.HIGH_PRIORITY)] = 3.0 / 6.0
+		s.wfqPhi[int(model.MEDIUM_PRIORITY)] = 2.0 / 6.0
+		s.wfqPhi[int(model.LOW_PRIORITY)] = 1.0 / 6.0
+		for p := 0; p < int(model.PRIORITY_LEVEL_COUNT); p++ {
+			e := s.wfqSched.CreateEntry(p)
+			e.SetPriority(float32(s.wfqPhi[p] * 6.0))
+			s.wfqEntries[p] = e
+		}
 		metrics.SetWFQWeights(map[int]float64{
 			int(model.LOW_PRIORITY):    1,
 			int(model.MEDIUM_PRIORITY): 2,
@@ -138,19 +152,16 @@ func (s *Scheduler) Enqueue(p model.Priority, req *model.VideoPacketRequest, fn 
 
 	// enfileira
 	if s.policy == PolicyWFQ {
-		// Usar o WFQ com peso dinâmico atual da classe
-		entry := s.wfqSched.CreateEntry(task{
+		// FIFO interna da classe + garante a entry persistente da classe no WFQ.
+		// (Entry já enfileirada → Enqueue é no-op; o peso dinâmico é atualizado
+		// pelo recalcWFQWeights via SetPriority.)
+		s.wfqQueues[int(p)] = append(s.wfqQueues[int(p)], task{
 			prio:     p,
 			req:      req,
 			fn:       fn,
 			enqueued: time.Now(),
 		})
-		// peso = φ_p_norm * W_total (dinâmico, atualizado pelo recalcWFQWeights)
-		entry.SetPriority(float32(s.wfqPhi[int(p)] * 6.0))
-		if !entry.Enqueue() {
-			log.Println("[SCHED] WFQ queue full")
-			return false
-		}
+		s.wfqEntries[int(p)].Enqueue()
 		s.wfqCount++
 	} else {
 		s.queues[int(p)] = append(s.queues[int(p)], task{
@@ -203,13 +214,14 @@ func (s *Scheduler) Stop() {
 
 // ----------------------- QueueLenProvider (opcional) ----------------------
 
-// QueueLenPerClass expõe comprimentos das filas por classe (para sampling)
+// QueueLenPerClass expõe comprimentos das filas por classe (para sampling).
+// Cobre tanto as filas FIFO/SP quanto as filas internas do WFQ.
 func (s *Scheduler) QueueLenPerClass() map[model.Priority]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := make(map[model.Priority]int, int(model.PRIORITY_LEVEL_COUNT))
 	for i := 0; i < int(model.PRIORITY_LEVEL_COUNT); i++ {
-		m[model.Priority(i)] = len(s.queues[i])
+		m[model.Priority(i)] = len(s.queues[i]) + len(s.wfqQueues[i])
 	}
 	return m
 }
@@ -311,8 +323,19 @@ func (s *Scheduler) pickWFQ() task {
 	if entry == nil {
 		return task{}
 	}
+	p := entry.UserData() // classe (int(model.Priority))
+	if len(s.wfqQueues[p]) == 0 {
+		// invariante quebrada (não deveria ocorrer): entry sem tarefa pendente
+		log.Printf("[SCHED] WFQ entry da classe %d sem tarefas", p)
+		return task{}
+	}
+	t := s.wfqQueues[p][0]
+	s.wfqQueues[p] = s.wfqQueues[p][1:]
 	s.wfqCount--
-	t := entry.UserData()
+	// classe ainda tem backlog → mantém a entry na disputa (virtual finish acumula)
+	if len(s.wfqQueues[p]) > 0 {
+		entry.Enqueue()
+	}
 
 	s.wfqRoundDequeues++
 	const wfqRoundSize = 3
@@ -347,8 +370,12 @@ func (s *Scheduler) recalcWFQWeights() {
 		Wtotal = 6.0  // 1+2+3 — escala dos pesos de saída
 	)
 	beta := wfqBeta()
-	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda)
-	phiBase := [3]float64{1.0 / Wtotal, 2.0 / Wtotal, 3.0 / Wtotal}
+	// φ_base_p = W_p_inicial / W_total (âncora fixa, não muda).
+	// Indexado por model.Priority (HIGH=0): FoV=3/6, vizinhança=2/6, fundo=1/6.
+	var phiBase [3]float64
+	phiBase[int(model.HIGH_PRIORITY)] = 3.0 / Wtotal
+	phiBase[int(model.MEDIUM_PRIORITY)] = 2.0 / Wtotal
+	phiBase[int(model.LOW_PRIORITY)] = 1.0 / Wtotal
 
 // Passo 1: total de bytes acumulados na rodada
 	var total int64
@@ -386,24 +413,31 @@ func (s *Scheduler) recalcWFQWeights() {
 		phi[p] /= phiSum
 	}
 
-	// Passo 6: converter φ → peso WFQ e publicar
+	// Passo 6: converter φ → peso WFQ e publicar.
+	// phi é indexado por model.Priority (HIGH=0, MED=1, LOW=2).
 	adapted := phi != s.wfqPhi
 	s.wfqPhi = phi
 
+	// Atualiza o peso das entries persistentes (vale para os próximos dequeues)
+	for p := 0; p < int(model.PRIORITY_LEVEL_COUNT); p++ {
+		s.wfqEntries[p].SetPriority(float32(phi[p] * Wtotal))
+	}
+
 	newWeights := map[int]float64{
-		int(model.LOW_PRIORITY):    phi[0] * Wtotal,
-		int(model.MEDIUM_PRIORITY): phi[1] * Wtotal,
-		int(model.HIGH_PRIORITY):   phi[2] * Wtotal,
+		int(model.LOW_PRIORITY):    phi[int(model.LOW_PRIORITY)] * Wtotal,
+		int(model.MEDIUM_PRIORITY): phi[int(model.MEDIUM_PRIORITY)] * Wtotal,
+		int(model.HIGH_PRIORITY):   phi[int(model.HIGH_PRIORITY)] * Wtotal,
 	}
 	metrics.SetWFQWeights(newWeights)
 	metrics.SetWFQAdapted(adapted)
 
-	log.Printf("[WFQ-DYN] x=%.2f/%.2f/%.2f φ=%.3f/%.3f/%.3f W=%.2f/%.2f/%.2f adapted=%v",
-		float64(s.wfqBytes[0])/float64(total),
-		float64(s.wfqBytes[1])/float64(total),
-		float64(s.wfqBytes[2])/float64(total),
-		phi[0], phi[1], phi[2],
-		phi[0]*Wtotal, phi[1]*Wtotal, phi[2]*Wtotal,
+	hi, med, lo := int(model.HIGH_PRIORITY), int(model.MEDIUM_PRIORITY), int(model.LOW_PRIORITY)
+	log.Printf("[WFQ-DYN] x(H/M/L)=%.2f/%.2f/%.2f φ(H/M/L)=%.3f/%.3f/%.3f W(H/M/L)=%.2f/%.2f/%.2f adapted=%v",
+		float64(s.wfqBytes[hi])/float64(total),
+		float64(s.wfqBytes[med])/float64(total),
+		float64(s.wfqBytes[lo])/float64(total),
+		phi[hi], phi[med], phi[lo],
+		phi[hi]*Wtotal, phi[med]*Wtotal, phi[lo]*Wtotal,
 		adapted)
 }
 

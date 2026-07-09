@@ -151,6 +151,26 @@ class Test():
         # Distribui traces de FoV entre clientes conforme FOV_MIX
         fov_traces = fov_traces_for_mix(dir, NUM_CLIENTS, FOV_MIX)
 
+        # Registra o mapeamento cliente → perfil de FoV para análise pós-hoc.
+        # Necessário para sustentar a hipótese H8 do professor (SP protege Wide).
+        # As colunas são: client_index, client_ip, fov_trace_path, profile.
+        def profile_from_path(p: str) -> str:
+            base = os.path.basename(p or '')
+            if 'wide' in base:
+                return 'wide'
+            if 'narrow' in base:
+                return 'shorter'
+            return 'normal'
+
+        try:
+            with open(os.path.join(dir, 'fov_assignment.csv'), 'w') as f:
+                f.write('client_index,client_ip,fov_trace_path,profile\n')
+                for i, client in enumerate(self.clients):
+                    trace = fov_traces[i] if i < len(fov_traces) else fov_traces[-1]
+                    f.write(f'{i},{client.IP()},{trace},{profile_from_path(trace)}\n')
+        except Exception as e:
+            safe_print(f'[warn] falha ao escrever fov_assignment.csv: {e}')
+
         # Start N clients em paralelo
         for i, client in enumerate(self.clients):
             client_env = os.environ.copy()
@@ -168,13 +188,23 @@ class Test():
                 stderr=subprocess.STDOUT)
             safe_print(f'[client-{i}] fov={fov_traces[i] if i < len(fov_traces) else fov_traces[-1]}')
 
-        expected = 1 + NUM_CLIENTS
+        # O servidor roda indefinidamente; pmonitor remove cada processo do dict
+        # quando ele termina. Encerramos quando TODOS os clientes acabarem — não
+        # no primeiro, senão os demais clientes seriam mortos prematuramente.
+        #
+        # Nota: statistics-summary-*.csv pode ficar vazio para clientes cuja
+        # goroutine handleTile trava em s.client.Request (bug conhecido do
+        # test_client). Nesse caso, wg.Wait() nunca retorna e o defer que
+        # grava o summary não roda. Os dados brutos por request continuam em
+        # statistics-*.csv (log contínuo), que é a fonte de verdade para
+        # todas as métricas de análise.
         for host, line in pmonitor(self.processes):
             if line:
                 if line.endswith('\n'):
                     line = line[:-1]
                 safe_print('[%s] %s' % (host, line))
-            if len(self.processes) != expected:
+            clients_left = sum(1 for h in self.processes if h is not self.server)
+            if clients_left == 0:
                 break
 
     def __finalize(self):

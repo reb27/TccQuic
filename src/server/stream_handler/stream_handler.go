@@ -13,10 +13,20 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucas-clemente/quic-go"
 )
+
+// activeHandlers conta as conexões QUIC ativas. Em execuções multi-cliente,
+// cada conexão tem seu próprio StreamHandler, mas as métricas globais
+// (server_summary, fairness, wfq_utilization) são um singleton em metrics.M().
+// Por isso, a inicialização global ocorre apenas na PRIMEIRA conexão e o
+// encerramento (gravação do summary + fechamento dos writers) apenas na ÚLTIMA.
+// Sem isso, o primeiro cliente a terminar fecharia os writers e gravaria um
+// summary parcial, descartando os dados dos demais clientes ainda transmitindo.
+var activeHandlers int32
 
 //
 // ============================== VISÃO GERAL ===============================
@@ -122,7 +132,12 @@ func (s *StreamHandler) Start() {
 	log.SetOutput(os.Stdout)
 	log.Println("[SERVER] StreamHandler starting")
 
-	// 1) REQLOG (por requisição) — usado para CDF/p95 etc.
+	// Registra esta conexão. A inicialização global das métricas só ocorre na
+	// primeira conexão para não reabrir os CSVs nem reiniciar o relógio de
+	// duração (runStart) a cada cliente.
+	first := atomic.AddInt32(&activeHandlers, 1) == 1
+
+	// 1) REQLOG (por requisição) — usado para CDF/p95 etc. (por handler)
 	s.reqlog = newCSVSink(
 		filepath.Join(remoteDir, "reqlog.csv"),
 		[]string{
@@ -132,13 +147,15 @@ func (s *StreamHandler) Start() {
 		},
 	)
 
-	// 2) AGREGADOS POR CLASSE (módulo metrics) — arquivo separado
-	metrics.M().InitClassAgg(filepath.Join(remoteDir, "class_agg.csv"))
+	if first {
+		// 2) AGREGADOS POR CLASSE (módulo metrics) — arquivo separado
+		metrics.M().InitClassAgg(filepath.Join(remoteDir, "class_agg.csv"))
 
-	// 3) Queue length CSV & work-conserving (opcional via provider)
-	metrics.M().InitQueueCSV(filepath.Join(remoteDir, "queue_len.csv"))
-	metrics.M().InitSummary(filepath.Join(remoteDir, "server_summary.csv"))
-	metrics.M().MarkRunStart()
+		// 3) Queue length CSV & work-conserving (opcional via provider)
+		metrics.M().InitQueueCSV(filepath.Join(remoteDir, "queue_len.csv"))
+		metrics.M().InitSummary(filepath.Join(remoteDir, "server_summary.csv"))
+		metrics.M().MarkRunStart()
+	}
 
 	// Se o scheduler expõe QueueLenPerClass, amostrar periodicamente
 	if qp, ok := any(s.taskScheduler).(QueueLenProvider); ok {
@@ -192,6 +209,8 @@ func (s *StreamHandler) Start() {
 // Stop encerra o scheduler, sampling e fecha CSVs.
 func (s *StreamHandler) Stop() {
 	log.Println("[SERVER] stopping...")
+
+	// Teardown por handler (sempre): scheduler, amostragem e reqlog desta conexão.
 	s.taskScheduler.Stop()
 
 	if s.queueSampler != nil {
@@ -200,19 +219,21 @@ func (s *StreamHandler) Stop() {
 	if s.stopSample != nil {
 		close(s.stopSample)
 	}
-
-	// Resumo final (shares, Jain, throughput, contadores)
-	metrics.M().WriteSummaryAndClose()
-
 	if s.reqlog != nil {
 		s.reqlog.close()
 	}
+
+	// Teardown global (apenas na ÚLTIMA conexão): grava o resumo final e fecha
+	// os writers compartilhados. Enquanto houver clientes transmitindo, esses
+	// writers seguem coletando dados.
+	if atomic.AddInt32(&activeHandlers, -1) == 0 {
+		metrics.M().WriteSummaryAndClose()
+		metrics.StopFairnessWriter()
+		metrics.StopWorkConservingWriter()
+		metrics.StopWFQUtilWriter()
+	}
+
 	log.Println("[SERVER] stopped")
-
-	metrics.StopFairnessWriter()
-	metrics.StopWorkConservingWriter()
-	metrics.StopWFQUtilWriter()
-
 }
 
 // HandleStream é chamado para cada novo stream QUIC aceito.
@@ -369,7 +390,10 @@ func (s *stream) handleRequestMeasured(req *model.VideoPacketRequest, deadline t
 		return 0
 	}
 
+	// Cronômetro 1: só a LEITURA do arquivo (disco/cache).
+	tRead := time.Now()
 	data := readFile(req)
+	readNs := time.Since(tRead).Nanoseconds()
 	if data == nil || len(data) == 0 {
 		// Falha de E/S não conta como deadline drop — bytes=0 e ontime=false
 		log.Printf("[REQ] file empty/missing seg=%d tile=%d", req.Segment, req.Tile)
@@ -383,6 +407,8 @@ func (s *stream) handleRequestMeasured(req *model.VideoPacketRequest, deadline t
 		Tile:     req.Tile,
 		Data:     data,
 	}
+	// Cronômetro 2: só o ENVIO pela rede (write + flush no QUIC).
+	tSend := time.Now()
 	if err := res.Write(s.writer); err != nil {
 		log.Printf("[RESP] write error: %v", err)
 		return 0
@@ -392,6 +418,10 @@ func (s *stream) handleRequestMeasured(req *model.VideoPacketRequest, deadline t
 		log.Printf("[RESP] flush error: %v", err)
 		return 0
 	}
+	sendNs := time.Since(tSend).Nanoseconds()
+
+	// Separa leitura (disco) de envio (rede) para responder o roteiro do professor.
+	metrics.M().RecordServiceSplit(req.Priority, readNs, sendNs)
 
 	// Registrar bytes no rastreador de banda
 	if s.parent != nil && s.parent.bwTracker != nil {

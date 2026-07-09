@@ -23,6 +23,11 @@ type classCounters struct {
 	SlackSum      int64 // ms
 	TimeToDropSum int64 // ms
 	OnTimeCount   int64 // reqs concluídas no prazo
+
+	// Separação do tempo de serviço (roteiro do professor): leitura vs envio.
+	ReadTimeSumNs int64 // ns acumulados só na leitura do arquivo (disco/cache)
+	SendTimeSumNs int64 // ns acumulados só no envio pela rede (write+flush QUIC)
+	SplitCount    int64 // nº de tiles com split registrado
 }
 
 // -------- métricas globais --------
@@ -117,6 +122,11 @@ type Metrics struct {
 
 	// run timing
 	runStart time.Time
+
+	// garante que o summary seja escrito/fechado uma única vez,
+	// mesmo que Stop() (fechamento de conexão) e o handler de SIGTERM
+	// chamem WriteSummaryAndClose() concorrentemente.
+	closeOnce sync.Once
 }
 
 type TaskCtx struct {
@@ -168,6 +178,8 @@ func (m *Metrics) InitClassAgg(path string) {
 		"bytes_on_time_ratio_pct",
 		"avg_slack_ms",
 		"avg_time_to_drop_ms",
+		"avg_read_ms", // só leitura do arquivo (disco/cache)
+		"avg_send_ms", // só envio pela rede (write+flush QUIC)
 	})
 }
 
@@ -227,6 +239,14 @@ func div(sum int64, n int64) float64 {
 	}
 	return float64(sum) / float64(n)
 }
+
+// divMs converte uma soma em nanossegundos numa média em milissegundos.
+func divMs(sumNs int64, n int64) float64 {
+	if n == 0 {
+		return 0
+	}
+	return float64(sumNs) / float64(n) / 1e6
+}
 func ratioPct(num int64, den int64) float64 {
 	if den == 0 {
 		return 0
@@ -250,7 +270,20 @@ func (m *Metrics) writeClassAggRow(className, event string, cl *classCounters) {
 		f64(ratioPct(cl.BytesOnTime, cl.BytesSent)),
 		f64(div(cl.SlackSum, cl.Started)),
 		f64(div(cl.TimeToDropSum, cl.DroppedDeadline)),
+		f64(divMs(cl.ReadTimeSumNs, cl.SplitCount)),
+		f64(divMs(cl.SendTimeSumNs, cl.SplitCount)),
 	})
+}
+
+// RecordServiceSplit acumula, por classe, o tempo de LEITURA (disco/cache) e de
+// ENVIO (rede) separados, para distinguir os dois gargalos do modelo do professor.
+func (m *Metrics) RecordServiceSplit(class Class, readNs, sendNs int64) {
+	m.mu.Lock()
+	cl := m.cls[class]
+	cl.ReadTimeSumNs += readNs
+	cl.SendTimeSumNs += sendNs
+	cl.SplitCount++
+	m.mu.Unlock()
 }
 
 // Atualiza contabilidade de work-conserving com base no estado atual.
@@ -305,9 +338,9 @@ func (m *Metrics) OnStart(ctx *TaskCtx) {
 
 	// Inversão de ordem: se há alguma fila com classe superior > 0
 	// e estamos iniciando uma classe inferior, conta inversão.
-	// Prioridade: low=0 < med=1 < high=2
+	// model.Priority: HIGH=0 < MED=1 < LOW=2 (número MENOR = prioridade MAIOR).
 	for c, q := range m.queueLen {
-		if int(c) > int(ctx.Class) && q > 0 {
+		if int(c) < int(ctx.Class) && q > 0 {
 			m.gl.Inversions++
 			break
 		}
@@ -401,6 +434,10 @@ func (m *Metrics) OnQueueSample(lens map[Class]int) {
 // -------------------- Summary --------------------
 
 func (m *Metrics) WriteSummaryAndClose() {
+	m.closeOnce.Do(m.writeSummaryAndClose)
+}
+
+func (m *Metrics) writeSummaryAndClose() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
